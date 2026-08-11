@@ -199,7 +199,20 @@ fn redirect_std_handles(file: &File) {
 /// 挂 panic hook：崩溃时把线程名、位置、payload 落一行 ERROR 日志（走的是
 /// 重定向过的 stderr），再链到系统默认 hook——开发时 `cargo tauri dev` 带
 /// 控制台，原有的默认崩溃输出照样能看到，不丢失。
+///
+/// fork 改动：**去重**。dowse 库抽取文本时对畸形 PDF/Office 文件用
+/// `catch_unwind` 兜底（见 `dowse::extract`），这些 panic 是预期内的、文件
+/// 会被安静跳过；但 panic hook 对每个被接住的 panic 也会执行，逐条打日志
+/// 会把日志刷爆（中文 PDF 目录下每次对账都能刷几百上千行）。改成：同一
+/// （位置+信息）的 panic 只完整记第一条并链默认 hook；重复的只计数，每满
+/// 100 次记一行"同一 panic 已重复 N 次"的汇总——真正的偶发崩溃信息一条
+/// 不少，被兜底的批量 panic 不再淹没日志。
 fn install_panic_hook() {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static PANIC_COUNTS: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
@@ -214,12 +227,31 @@ fn install_panic_hook() {
             .map(|s| s.to_string())
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "<non-string panic payload>".to_string());
-        log_line_at(
-            LogLevel::Error,
-            "panic",
-            &format!("线程 [{thread_name}] 在 {location} 崩溃: {payload}"),
-        );
-        default_hook(info);
+
+        let key = format!("{location} | {payload}");
+        let counts = PANIC_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = counts.lock().unwrap_or_else(|e| e.into_inner());
+        let n = *guard.entry(key.clone()).or_insert(0);
+        *guard.entry(key.clone()).or_insert(0) += 1;
+        drop(guard);
+
+        if n == 0 {
+            // 第一条：完整记一行并链默认 hook（保留 stderr 的原始崩溃输出）。
+            log_line_at(
+                LogLevel::Error,
+                "panic",
+                &format!("线程 [{thread_name}] 在 {location} 崩溃: {payload}"),
+            );
+            default_hook(info);
+        } else if n % 100 == 0 {
+            // 同一 panic 反复出现：每满 100 次汇总一行，不再逐条刷屏。
+            log_line_at(
+                LogLevel::Warn,
+                "panic",
+                &format!("同一 panic 已重复 {n} 次（{key}）"),
+            );
+        }
+        // 其它重复：静默计数，不写日志。
     }));
 }
 
