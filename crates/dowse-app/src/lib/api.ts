@@ -57,6 +57,13 @@ export function addRoot(dir: string): Promise<IndexStats> {
 	return invoke('add_root', { dir });
 }
 
+/// 从索引里移除一个根（设置面板"索引目录"列表的移除按钮用）：前缀圈选删
+/// 文档并更新索引，不影响其它根。完成后监听 `dowse://root-removed` 事件刷新
+/// 列表。
+export function removeRoot(dir: string): Promise<{ removed: number }> {
+	return invoke('remove_root', { dir });
+}
+
 export function getEffectLevel(): Promise<EffectLevel> {
 	return invoke('get_effect_level');
 }

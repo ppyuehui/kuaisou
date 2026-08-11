@@ -290,6 +290,33 @@ pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDt
     result
 }
 
+/// 从索引里移除一个根目录（设置面板"索引目录"列表的移除按钮用）。复用托盘
+/// 每根子菜单"移除"同一条实现（`rebuild::perform_remove_root`：前缀圈选删
+/// 文档 + OCR 队列 compact + 从 meta 移除根），跟 `rebuild_index`/`add_root`
+/// 一样 async + 后台线程 + `RebuildGuard` 防并发。完成后前端靠
+/// `dowse://root-removed` 事件刷新根列表。
+#[tauri::command]
+pub async fn remove_root(
+    app: tauri::AppHandle,
+    dir: String,
+) -> Result<crate::rebuild::RemoveRootStatsDto, String> {
+    {
+        let guard = app.state::<RebuildGuard>();
+        if !guard.try_begin() {
+            return Err("已有一次建索引正在进行中，请稍候".to_string());
+        }
+    }
+    let target = PathBuf::from(&dir);
+    let app_for_work = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::rebuild::perform_remove_root(&app_for_work, target)
+    })
+    .await
+    .map_err(|e| format!("建索引线程异常：{e}"))?;
+    app.state::<RebuildGuard>().end();
+    result
+}
+
 /// 图钉固定开关：前端点了图钉按钮就调这个命令。fork 改动：图钉现在同时控制
 /// 两件事——
 /// 1. 会话级的"抑制失焦自动隐藏"（见 autohide.rs 的 `AutoHideSuppressor`），

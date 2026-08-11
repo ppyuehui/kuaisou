@@ -156,6 +156,11 @@ interface Strings {
 	openIndexDir: string;
 	// 通用区 - 创建索引入口（fork 新增）
 	createIndex: string;
+	// 通用区 - 索引目录列表（fork 新增：显示/添加/移除）
+	setIndexDirsLabel: string;
+	setAddIndexDir: string;
+	setRemoveIndexDir: string;
+	setNoIndexDirs: string;
 	// 主窗口右上角图标按钮 tooltip（fork 新增）
 	winClose: string;
 	winSettings: string;
@@ -286,6 +291,10 @@ const zh: Strings = {
 	winClose: '隐藏窗口',
 	winSettings: '设置',
 	createIndex: '创建索引',
+	setIndexDirsLabel: '索引目录',
+	setAddIndexDir: '添加索引目录',
+	setRemoveIndexDir: '移除',
+	setNoIndexDirs: '当前没有索引目录，点"添加索引目录"或"创建索引"开始。',
 	setOn: '开',
 	setOff: '关',
 	rpTitle: '索引规则',
@@ -411,6 +420,10 @@ const en: Strings = {
 	winClose: 'Hide window',
 	winSettings: 'Settings',
 	createIndex: 'Create index',
+	setIndexDirsLabel: 'Indexed folders',
+	setAddIndexDir: 'Add folder',
+	setRemoveIndexDir: 'Remove',
+	setNoIndexDirs: 'No indexed folders yet. Use "Add folder" or "Create index" to start.',
 	setOn: 'On',
 	setOff: 'Off',
 	rpTitle: 'Index rules',

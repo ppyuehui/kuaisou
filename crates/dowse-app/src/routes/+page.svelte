@@ -1076,6 +1076,10 @@
 				closeSettingsPanel();
 				pickDirectoryAndRebuild();
 			}}
+			onaddindex={() => {
+				closeSettingsPanel();
+				pickDirectoryAndAddRoot();
+			}}
 		/>
 	{/if}
 </div>

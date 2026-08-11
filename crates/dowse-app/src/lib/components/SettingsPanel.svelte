@@ -30,7 +30,8 @@
 		roots,
 		onclose,
 		onrebuild,
-		oncreateindex
+		oncreateindex,
+		onaddindex
 	}: {
 		/** 已注册的全部索引根（display_path 清洗过）。"立即重建"只在恰好一个
 		 * 根时可用——`rebuild_index` 命令用单个目标目录整体替换索引，多根
@@ -44,6 +45,9 @@
 		/** fork 新增："创建索引"入口——父组件负责弹目录选择器并启动建索引
 		 * （复用主窗口空态同一条路径）。 */
 		oncreateindex: () => void;
+		/** fork 新增："添加索引目录"入口——父组件弹目录选择器并走 add_root
+		 * （增量补扫，不动已有索引）。 */
+		onaddindex: () => void;
 	} = $props();
 
 	// 当前分区，默认停在「通用」。
@@ -327,6 +331,17 @@
 		}
 	}
 
+	// ── 移除索引根：完成后父组件靠 dowse://root-removed 事件刷新 roots ─────
+	let rootsError = $state('');
+	async function removeIndexRoot(path: string) {
+		rootsError = '';
+		try {
+			await api.removeRoot(path);
+		} catch (err) {
+			rootsError = String(err);
+		}
+	}
+
 	// ── 键盘：Esc 关面板（捕获态例外，已在 captureKeydown 里先行拦截） ──────
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
@@ -557,6 +572,35 @@
 						{t.createIndex}
 					</button>
 				</div>
+			</div>
+
+			<!-- fork 新增：索引目录列表——显示全部索引根，可添加多个、逐个移除 -->
+			<div class="field">
+				<div class="field-inline">
+					<span class="field-label">{t.setIndexDirsLabel}</span>
+					<button type="button" class="mini-btn" onclick={onaddindex}>{t.setAddIndexDir}</button>
+				</div>
+				{#if roots.length === 0}
+					<p class="field-hint">{t.setNoIndexDirs}</p>
+				{:else}
+					<ul class="root-list">
+						{#each roots as root (root)}
+							<li class="root-item">
+								<span class="root-path" title={root}>{root}</span>
+								<button
+									type="button"
+									class="mini-btn"
+									onclick={() => removeIndexRoot(root)}
+								>
+									{t.setRemoveIndexDir}
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if rootsError}
+					<p class="status error">{rootsError}</p>
+				{/if}
 			</div>
 
 			<!-- fork 新增：打开日志/索引文件夹 -->
@@ -892,6 +936,40 @@
 		display: flex;
 		gap: 8px;
 		margin-top: 2px;
+	}
+
+	/* fork 新增：索引目录列表——每行路径 + 移除按钮 */
+	.root-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.root-item {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 6px 8px 6px 10px;
+		border: 1px solid var(--panel-border);
+		border-radius: var(--radius-chip);
+		background: var(--row-hover);
+	}
+
+	.root-path {
+		flex: 1;
+		min-width: 0;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--fg-secondary);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		direction: rtl;
+		text-align: left;
 	}
 
 	.save,

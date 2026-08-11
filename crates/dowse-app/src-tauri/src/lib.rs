@@ -127,6 +127,7 @@ pub fn run() {
             commands::reveal_in_folder,
             commands::rebuild_index,
             commands::add_root,
+            commands::remove_root,
             commands::get_effect_level,
             commands::get_glass_alpha,
             commands::get_hotkey,
