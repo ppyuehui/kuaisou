@@ -290,12 +290,23 @@ pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDt
     result
 }
 
-/// 图钉固定开关：前端点了图钉按钮就调这个命令，把会话级的"抑制失焦自动
-/// 隐藏"状态同步到 Rust 侧（见 autohide.rs 的 `AutoHideSuppressor`）。
-/// 不落盘——重启应用后前端按钮状态和这里的计数器都回到初始值。
+/// 图钉固定开关：前端点了图钉按钮就调这个命令。fork 改动：图钉现在同时控制
+/// 两件事——
+/// 1. 会话级的"抑制失焦自动隐藏"（见 autohide.rs 的 `AutoHideSuppressor`），
+///    固定期间点窗口外不收起浮窗；
+/// 2. 窗口置顶（`set_always_on_top`）——默认窗口不置顶（常驻普通窗口的姿势），
+///    点图钉置顶，再点取消置顶。
+/// 两者都不落盘——重启应用后回到"不置顶 + 失焦自动隐藏按配置"。
 #[tauri::command]
-pub fn set_pinned(suppressor: State<AutoHideSuppressor>, pinned: bool) {
+pub fn set_pinned(
+    app: tauri::AppHandle,
+    suppressor: State<AutoHideSuppressor>,
+    pinned: bool,
+) {
     suppressor.set_pinned(pinned);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_always_on_top(pinned);
+    }
 }
 
 /// 索引规则面板的读取入口：取当前索引目录旁 rules.json 里的规则（没配过就

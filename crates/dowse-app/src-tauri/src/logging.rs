@@ -223,10 +223,18 @@ fn install_panic_hook() {
     }));
 }
 
-/// 不引入日期时间 crate，手写一个 UTC 时间戳格式化（Howard Hinnant 的
-/// civil_from_days 算法）——日志只是给人看的排障材料，精确到秒的 UTC
-/// 时间戳完全够用，没必要为了本地时区/多种格式拉一个新依赖。
-fn format_now() -> String {
+/// 本地时间（Windows：`GetLocalTime`；其它平台回落 UTC）。返回
+/// (年,月,日,时,分,秒)。
+#[cfg(target_os = "windows")]
+fn local_time() -> (u16, u16, u16, u16, u16, u16) {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    let st: SYSTEMTIME = unsafe { GetLocalTime() };
+    (st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn local_time() -> (u16, u16, u16, u16, u16, u16) {
     let now = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -235,21 +243,27 @@ fn format_now() -> String {
     let (hour, rem) = (rem / 3600, rem % 3600);
     let (min, sec) = (rem / 60, rem % 60);
     let (year, month, day) = civil_from_days(days as i64);
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}:{sec:02} UTC")
+    (year as u16, month as u16, day as u16, hour as u16, min as u16, sec as u16)
 }
 
-/// 今天的日期串 `YYYY-MM-DD`，用作日志文件名。
+/// 时间戳格式化（本地时间）——日志只是给人看的排障材料，精确到秒完全够用。
+/// fork 改动：原来是 UTC，改成系统本地时间（跟 Windows 资源管理器里看到的
+/// 文件时间一致，排查更直观）。
+fn format_now() -> String {
+    let (year, month, day, hour, min, sec) = local_time();
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}:{sec:02}")
+}
+
+/// 今天的日期串 `YYYY-MM-DD`（本地日期），用作日志文件名。
 fn today_str() -> String {
-    let now = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let days = (now.as_secs() / 86_400) as i64;
-    let (year, month, day) = civil_from_days(days);
+    let (year, month, day, _, _, _) = local_time();
     format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// `days` = 自 1970-01-01 起的天数，返回 (year, month, day)。算法来自
 /// Howard Hinnant 的 `civil_from_days`（公开的、被广泛引用的无分支实现）。
+/// Windows 主路径用 `GetLocalTime`，这个函数只服务非 Windows 回落和单测。
+#[allow(dead_code)]
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
