@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_opener::OpenerExt;
@@ -293,8 +293,8 @@ pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDt
 /// 从索引里移除一个根目录（设置面板"索引目录"列表的移除按钮用）。复用托盘
 /// 每根子菜单"移除"同一条实现（`rebuild::perform_remove_root`：前缀圈选删
 /// 文档 + OCR 队列 compact + 从 meta 移除根），跟 `rebuild_index`/`add_root`
-/// 一样 async + 后台线程 + `RebuildGuard` 防并发。完成后前端靠
-/// `dowse://root-removed` 事件刷新根列表。
+/// 一样 async + 后台线程 + `RebuildGuard` 防并发。成功时补发
+/// `dowse://root-removed`（跟托盘"移除"一致）——前端靠它刷新根列表。
 #[tauri::command]
 pub async fn remove_root(
     app: tauri::AppHandle,
@@ -306,7 +306,15 @@ pub async fn remove_root(
             return Err("已有一次建索引正在进行中，请稍候".to_string());
         }
     }
-    let target = PathBuf::from(&dir);
+    // 前端列表给的是 display_path（剥掉 `\\?\` 前缀），而 dowse 的
+    // `remove_root_from_meta` 要求与 registered_roots 的原值**精确匹配**（Windows
+    // 上是 canonicalize 出来的 `\\?\` 扩展路径）。这里把入参归一化后逐项比
+    // 对，找到那条已注册根的原值再传下去——目录已从磁盘删掉也能匹配上。
+    let index_dir = crate::config::index_dir().map_err(|e| e.to_string())?;
+    let registered = dowse::registered_roots(&index_dir).map_err(|e| e.to_string())?;
+    let target = resolve_registered_root(&registered, &dir)
+        .ok_or_else(|| format!("目录 {dir} 不是已注册的索引根"))?;
+
     let app_for_work = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         crate::rebuild::perform_remove_root(&app_for_work, target)
@@ -314,7 +322,32 @@ pub async fn remove_root(
     .await
     .map_err(|e| format!("建索引线程异常：{e}"))?;
     app.state::<RebuildGuard>().end();
+    if let Ok(stats) = &result {
+        let _ = app.emit("dowse://root-removed", stats.removed);
+    }
     result
+}
+
+/// 在已注册根列表里找与 `input` 对应的一条（返回存储原值）。Windows 上注册根
+/// 是 `\\?\` 扩展路径、前端传入的是剥过前缀的 display_path，不能直接 `==`；
+/// 归一化（去 `\\?\`/`\\?\UNC\` 前缀、去尾斜杠、转小写）后比较。
+fn resolve_registered_root(registered: &[PathBuf], input: &str) -> Option<PathBuf> {
+    fn norm(s: &str) -> String {
+        let trimmed = s.trim_end_matches(['\\', '/']);
+        let owned = if let Some(rest) = trimmed.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = trimmed.strip_prefix(r"\\?\") {
+            rest.to_string()
+        } else {
+            trimmed.to_string()
+        };
+        owned.to_lowercase()
+    }
+    let input_norm = norm(input);
+    registered
+        .iter()
+        .find(|r| norm(&r.to_string_lossy()) == input_norm)
+        .cloned()
 }
 
 /// 图钉固定开关：前端点了图钉按钮就调这个命令。fork 改动：图钉现在同时控制
