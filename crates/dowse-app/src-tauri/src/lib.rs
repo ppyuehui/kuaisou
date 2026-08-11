@@ -130,6 +130,9 @@ pub fn run() {
             commands::set_transparency_tier,
             commands::set_autostart,
             commands::set_lang,
+            commands::set_auto_hide_on_blur,
+            commands::open_log_dir,
+            commands::open_index_dir,
             commands::file_icon,
             commands::set_pinned,
             commands::hide_window,
@@ -202,6 +205,13 @@ pub fn run() {
             // 都不经过这里，固定状态不会拦住用户主动收起浮窗。
             if let WindowEvent::Focused(false) = event {
                 if window.state::<AutoHideSuppressor>().is_suppressed() {
+                    return;
+                }
+                // 设置面板"失焦自动隐藏"开关：默认关，fork 的使用姿势是常驻
+                // 普通窗口（可拖动、点别处不收起），打开后才恢复 Spotlight 式
+                // "点窗口外就隐藏"的习惯。这条是持久化配置，跟图钉的会话级
+                // 抑制是两套独立机制，都在这一个判断里收敛。
+                if !window.state::<ConfigState>().get().auto_hide_on_blur {
                     return;
                 }
                 let _ = window.hide();

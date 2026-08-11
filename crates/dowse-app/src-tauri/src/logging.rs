@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 /// 使用节奏下能覆盖相当长的运行时间。
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
-fn log_dir() -> Option<PathBuf> {
+/// 日志目录：`%LOCALAPPDATA%\dowse\logs`。`pub` 供设置面板"打开日志文件夹"
+/// （`commands::open_log_dir`）复用同一个路径来源，避免两处各写一份。
+pub fn log_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "dowse").map(|dirs| dirs.data_local_dir().join("logs"))
 }
 

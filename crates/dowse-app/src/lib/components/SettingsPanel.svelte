@@ -54,6 +54,8 @@
 	let autostartEnabled = $state(false);
 	let lang = $state<LangOption>('auto');
 	let langChanged = $state(false); // 改过语言 → 显示"重启后生效"
+	// fork 新增：失焦自动隐藏开关，默认关（常驻窗口姿势）。
+	let autoHideOnBlur = $state(false);
 
 	// ── 改键捕获态 ──────────────────────────────────────────────────────────
 	let capturing = $state(false); // 正在等用户按下新组合键
@@ -282,6 +284,26 @@
 			.catch((e) => console.error('setLang failed', e));
 	}
 
+	// ── 失焦自动隐藏：即存即生效，无"保存"按钮 ────────────────────────────
+	function pickAutoHide(on: boolean) {
+		autoHideOnBlur = on;
+		api.setAutoHideOnBlur(on).catch((e) => {
+			autoHideOnBlur = !on;
+			console.error('setAutoHideOnBlur failed', e);
+		});
+	}
+
+	// ── 打开数据文件夹：失败 toast 由按钮旁的状态行呈现 ────────────────────
+	let folderError = $state('');
+	async function openFolder(kind: 'log' | 'index') {
+		folderError = '';
+		try {
+			await (kind === 'log' ? api.openLogDir() : api.openIndexDir());
+		} catch (err) {
+			folderError = String(err);
+		}
+	}
+
 	// ── 键盘：Esc 关面板（捕获态例外，已在 captureKeydown 里先行拦截） ──────
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
@@ -307,6 +329,7 @@
 				tier = cfg.transparency_tier;
 				autostartEnabled = cfg.autostart_enabled;
 				lang = cfg.lang;
+				autoHideOnBlur = cfg.auto_hide_on_blur;
 			})
 			.catch(() => {
 				// 静默：通用区退回默认展示值即可。
@@ -478,6 +501,34 @@
 				</div>
 				{#if langChanged}
 					<p class="field-hint restart">{t.setLangRestartHint}</p>
+				{/if}
+			</div>
+
+			<!-- fork 新增：失焦自动隐藏开关 -->
+			<div class="field">
+				<div class="field-inline">
+					<span class="field-label">{t.setAutoHideLabel}</span>
+					{@render segmented(
+						ONOFF_OPTIONS,
+						autoHideOnBlur ? 'on' : 'off',
+						(v) => pickAutoHide(v === 'on'),
+						false
+					)}
+				</div>
+			</div>
+
+			<!-- fork 新增：打开日志/索引文件夹 -->
+			<div class="field">
+				<div class="folder-actions">
+					<button type="button" class="mini-btn" onclick={() => openFolder('log')}>
+						{t.openLogDir}
+					</button>
+					<button type="button" class="mini-btn" onclick={() => openFolder('index')}>
+						{t.openIndexDir}
+					</button>
+				</div>
+				{#if folderError}
+					<p class="status error">{folderError}</p>
 				{/if}
 			</div>
 		{:else}
@@ -792,6 +843,13 @@
 	.actions {
 		display: flex;
 		gap: 8px;
+	}
+
+	/* fork 新增：打开日志/索引文件夹两个按钮并排 */
+	.folder-actions {
+		display: flex;
+		gap: 8px;
+		margin-top: 2px;
 	}
 
 	.save,

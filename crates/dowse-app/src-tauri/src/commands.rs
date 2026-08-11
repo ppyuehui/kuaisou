@@ -324,9 +324,10 @@ pub struct SettingsDto {
     pub transparency_tier: TransparencyTier,
     pub autostart_enabled: bool,
     pub lang: String,
+    pub auto_hide_on_blur: bool,
 }
 
-/// 设置面板打开时拉一次通用区的全部初值（改键/透明/自启/语言）。
+/// 设置面板打开时拉一次通用区的全部初值（改键/透明/自启/语言/失焦自动隐藏）。
 #[tauri::command]
 pub fn get_config(app: tauri::AppHandle) -> SettingsDto {
     let cfg = app.state::<ConfigState>().get();
@@ -337,6 +338,7 @@ pub fn get_config(app: tauri::AppHandle) -> SettingsDto {
         transparency_tier: cfg.transparency_tier,
         autostart_enabled,
         lang: cfg.lang,
+        auto_hide_on_blur: cfg.auto_hide_on_blur,
     }
 }
 
@@ -414,6 +416,42 @@ pub fn set_lang(config: State<ConfigState>, lang: String) -> Result<(), String> 
         return Err(format!("不支持的语言取值：{lang}"));
     }
     config.set_lang(lang).map_err(|e| e.to_string())
+}
+
+/// 设置面板"失焦自动隐藏"开关：持久化到 config（见 `config.rs` 的
+/// `auto_hide_on_blur`）。默认关——fork 的使用姿势是常驻窗口。Rust 侧
+/// `lib.rs` 的 `WindowEvent::Focused(false)` 处理每次失焦现读这个值，
+/// 所以这里不需要再做任何运行时同步，落盘即生效。
+#[tauri::command]
+pub fn set_auto_hide_on_blur(config: State<ConfigState>, enabled: bool) -> Result<(), String> {
+    config.set_auto_hide_on_blur(enabled).map_err(|e| e.to_string())
+}
+
+/// 在资源管理器里打开日志文件夹（`%LOCALAPPDATA%\dowse\logs`），返回打开的
+/// 路径。目录不存在就先建出来再打开——日志初始化时一定会建，这里只是兜底，
+/// 避免极端情况下 explorer 对着一个不存在的路径弹无关窗口。
+#[tauri::command]
+pub fn open_log_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = crate::logging::log_dir().ok_or_else(|| "拿不到日志目录".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.to_string_lossy().into_owned();
+    app.opener()
+        .open_path(&path, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// 在资源管理器里打开索引文件夹（`%LOCALAPPDATA%\dowse\index`），返回打开的
+/// 路径。索引目录由 `config::index_dir` 固定，多根索引时也只有一个落盘目录。
+#[tauri::command]
+pub fn open_index_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = crate::config::index_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.to_string_lossy().into_owned();
+    app.opener()
+        .open_path(&path, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 /// Esc 收起浮窗。前端原先直接调 JS 侧 `getCurrentWindow().hide()`，那是

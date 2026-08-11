@@ -167,3 +167,21 @@ export function setAutostart(enabled: boolean): Promise<void> {
 export function setLang(lang: LangOption): Promise<void> {
 	return invoke('set_lang', { lang });
 }
+
+/// 设置面板"失焦自动隐藏"开关：持久化到 config（默认关）。失焦时 Rust 侧
+/// 每次现读这个值决定要不要隐藏，落盘即生效，不需要额外同步。
+export function setAutoHideOnBlur(enabled: boolean): Promise<void> {
+	return invoke('set_auto_hide_on_blur', { enabled });
+}
+
+/// 在资源管理器里打开日志文件夹（%LOCALAPPDATA%\dowse\logs），resolve 出
+/// 打开的路径。
+export function openLogDir(): Promise<string> {
+	return invoke('open_log_dir');
+}
+
+/// 在资源管理器里打开索引文件夹（%LOCALAPPDATA%\dowse\index），resolve 出
+/// 打开的路径。
+export function openIndexDir(): Promise<string> {
+	return invoke('open_index_dir');
+}

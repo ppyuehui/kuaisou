@@ -31,6 +31,12 @@ pub struct AppConfig {
     /// 跟部分用户机器上的 PowerToys Run 冲突。设置面板"改键"改的就是这个字段。
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// 失焦自动隐藏：默认关——fork 版把浮窗当成常驻普通窗口用（可拖动、可手动
+    /// 隐藏），不希望在点别处时突然收起。设为 true 恢复 Spotlight/Raycast 那种
+    /// "点窗口外面就隐藏"的习惯。设置面板"失焦自动隐藏"开关落盘这个字段；
+    /// 图钉（`AutoHideSuppressor`）是会话级的独立机制，两者互不冲突。
+    #[serde(default = "default_auto_hide_on_blur")]
+    pub auto_hide_on_blur: bool,
     /// 界面语言覆盖："auto"（默认）跟随系统 UI 语言，保持 0.7.0 起"纯跟随
     /// 系统"的行为不变；"zh"/"en" 把界面钉死为中/英。设置面板"界面语言"写
     /// 这个字段。前端 `lib/i18n.ts` 和 Rust 托盘 `i18n.rs` 都在**启动时**读它
@@ -48,6 +54,11 @@ fn default_hotkey() -> String {
     "Alt+Backquote".to_string()
 }
 
+/// 默认不自动隐藏——fork 的使用姿势是常驻窗口（见 `auto_hide_on_blur` 注释）。
+fn default_auto_hide_on_blur() -> bool {
+    false
+}
+
 fn default_lang() -> String {
     "auto".to_string()
 }
@@ -61,6 +72,7 @@ impl Default for AppConfig {
             autostart_user_disabled: false,
             hotkey: default_hotkey(),
             lang: default_lang(),
+            auto_hide_on_blur: default_auto_hide_on_blur(),
         }
     }
 }
@@ -139,6 +151,13 @@ impl ConfigState {
     pub fn set_hotkey(&self, hotkey: String) -> Result<()> {
         let mut guard = self.0.lock().expect("config mutex poisoned");
         guard.hotkey = hotkey;
+        save(&guard)
+    }
+
+    /// 设置面板"失焦自动隐藏"落盘。只改这一个字段，不动其它配置。
+    pub fn set_auto_hide_on_blur(&self, enabled: bool) -> Result<()> {
+        let mut guard = self.0.lock().expect("config mutex poisoned");
+        guard.auto_hide_on_blur = enabled;
         save(&guard)
     }
 

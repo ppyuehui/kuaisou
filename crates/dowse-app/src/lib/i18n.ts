@@ -142,6 +142,14 @@ interface Strings {
 	setLangZh: string;
 	setLangEn: string;
 	setLangRestartHint: string;
+	// 通用区 - 失焦自动隐藏（fork 新增：默认关，浮窗当常驻窗口用）
+	setAutoHideLabel: string;
+	// 通用区 - 打开数据文件夹（日志/索引）
+	openLogDir: string;
+	openIndexDir: string;
+	// 主窗口右上角图标按钮 tooltip（fork 新增）
+	winClose: string;
+	winSettings: string;
 	// 通用区 - 开/关两态（透明/自启共用）
 	setOn: string;
 	setOff: string;
@@ -257,6 +265,11 @@ const zh: Strings = {
 	setLangZh: '中文',
 	setLangEn: 'English',
 	setLangRestartHint: '重启后生效。',
+	setAutoHideLabel: '失焦自动隐藏',
+	openLogDir: '打开日志文件夹',
+	openIndexDir: '打开索引文件夹',
+	winClose: '隐藏窗口',
+	winSettings: '设置',
 	setOn: '开',
 	setOff: '关',
 	rpTitle: '索引规则',
@@ -370,6 +383,11 @@ const en: Strings = {
 	setLangZh: '中文',
 	setLangEn: 'English',
 	setLangRestartHint: 'Takes effect after restart.',
+	setAutoHideLabel: 'Auto-hide on blur',
+	openLogDir: 'Open log folder',
+	openIndexDir: 'Open index folder',
+	winClose: 'Hide window',
+	winSettings: 'Settings',
 	setOn: 'On',
 	setOff: 'Off',
 	rpTitle: 'Index rules',

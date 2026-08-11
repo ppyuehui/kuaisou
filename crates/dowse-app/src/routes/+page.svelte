@@ -978,6 +978,40 @@
 				ontoggle={openSortMenu}
 			/>
 			<PinButton {pinned} onclick={togglePinned} />
+			<!-- fork 新增：设置按钮，鼠标用户不用记 Ctrl+, 也能进设置 -->
+			<button
+				type="button"
+				class="icon-btn"
+				title={t.winSettings}
+				aria-label={t.winSettings}
+				onclick={openSettingsPanel}
+			>
+				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+					<path
+						d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z"
+						stroke="currentColor"
+						stroke-width="1.5"
+					/>
+					<path
+						d="M19.4 15a1.8 1.8 0 0 0 .36 2l.13.12a2.2 2.2 0 1 1-3.1 3.1l-.13-.13a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1.1 1.65V21.7a2.2 2.2 0 1 1-4.4 0v-.2A1.8 1.8 0 0 0 7.6 20a1.8 1.8 0 0 0-2 .36l-.12.12a2.2 2.2 0 1 1-3.1-3.1l.13-.13a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.65-1.1H1.2a2.2 2.2 0 1 1 0-4.4h.2A1.8 1.8 0 0 0 3 8.5a1.8 1.8 0 0 0-.36-2l-.12-.12a2.2 2.2 0 1 1 3.1-3.1l.13.13A1.8 1.8 0 0 0 8 3.7a1.8 1.8 0 0 0 1.1-1.65v-.2a2.2 2.2 0 1 1 4.4 0v.2A1.8 1.8 0 0 0 14.5 3.7a1.8 1.8 0 0 0 2-.36l.12-.12a2.2 2.2 0 1 1 3.1 3.1l-.13.13a1.8 1.8 0 0 0-.36 2 1.8 1.8 0 0 0 1.65 1.1h.2a2.2 2.2 0 1 1 0 4.4h-.2A1.8 1.8 0 0 0 19.4 15z"
+						stroke="currentColor"
+						stroke-width="1.1"
+						stroke-linejoin="round"
+					/>
+				</svg>
+			</button>
+			<!-- fork 新增：关闭按钮——隐藏回托盘（进程常驻，托盘可真正退出） -->
+			<button
+				type="button"
+				class="icon-btn"
+				title={t.winClose}
+				aria-label={t.winClose}
+				onclick={() => api.hideWindow().catch((err) => console.error('hideWindow failed', err))}
+			>
+				<svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+					<path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+				</svg>
+			</button>
 		</div>
 	</div>
 
@@ -1176,6 +1210,28 @@
 		align-items: center;
 		gap: 2px;
 		flex-shrink: 0;
+	}
+
+	/* fork 新增：设置/关闭两个图标按钮，跟图钉同一种幽灵按钮语言 */
+	.icon-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		border: none;
+		background: transparent;
+		border-radius: var(--radius-chip);
+		color: var(--fg-tertiary);
+		cursor: default;
+		transition:
+			color 0.12s ease-out,
+			background-color 0.12s ease-out;
+	}
+
+	.icon-btn:hover {
+		color: var(--fg-secondary);
+		background: var(--row-hover);
 	}
 
 	.search-input::placeholder {

@@ -98,6 +98,8 @@ export interface AppSettings {
 	transparency_tier: TransparencyTier;
 	autostart_enabled: boolean;
 	lang: LangOption;
+	/** 失焦自动隐藏开关（默认关——fork 的常驻窗口姿势）。 */
+	auto_hide_on_blur: boolean;
 }
 
 /// 面板可视不透明度的明/暗两套 CSS alpha（0~1），跟托盘"透明度"三档挂钩，
