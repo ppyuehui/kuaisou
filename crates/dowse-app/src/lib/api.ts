@@ -174,6 +174,12 @@ export function setAutoHideOnBlur(enabled: boolean): Promise<void> {
 	return invoke('set_auto_hide_on_blur', { enabled });
 }
 
+/// 设置面板"日志级别"（debug/info/warn/error/fatal）：即时应用到日志过滤，
+/// 并持久化到 config（重启后仍生效）。
+export function setLogLevel(level: string): Promise<void> {
+	return invoke('set_log_level', { level });
+}
+
 /// 在资源管理器里打开日志文件夹（%LOCALAPPDATA%\dowse\logs），resolve 出
 /// 打开的路径。
 export function openLogDir(): Promise<string> {

@@ -28,6 +28,18 @@
         "skipTaskbar": true,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "indexing",
+        "title": "索引进度",
+        "width": 460,
+        "height": 300,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": true,
+        "decorations": true,
+        "visible": false,
+        "url": "indexing"
       }
     ],
     "security": {

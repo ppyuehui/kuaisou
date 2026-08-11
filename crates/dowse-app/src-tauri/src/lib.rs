@@ -56,11 +56,18 @@ fn parse_shortcut(hotkey: &str) -> Shortcut {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 越早越好：这一步之后所有的 eprintln!/println!（包括 dowse 内部
-    // 各处排障日志）才会落进 `%LOCALAPPDATA%\dowse\logs\dowse.log`，
+    // 各处排障日志）才会落进 `%LOCALAPPDATA%\dowse\logs\YYYY-MM-DD.log`，
     // 而不是消失在 GUI 子系统没有控制台的黑洞里（见 logging.rs 的文档）。
     logging::init();
 
-    let toggle = parse_shortcut(&config::load().hotkey);
+    let cfg = config::load();
+    // 启动时把配置里的日志级别应用进过滤（默认 info）；运行中设置面板改级别
+    // 走 `commands::set_log_level`，不经过这里。
+    logging::set_min_level(
+        logging::LogLevel::parse(&cfg.log_level).unwrap_or(logging::LogLevel::Info),
+    );
+
+    let toggle = parse_shortcut(&cfg.hotkey);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -131,6 +138,7 @@ pub fn run() {
             commands::set_autostart,
             commands::set_lang,
             commands::set_auto_hide_on_blur,
+            commands::set_log_level,
             commands::open_log_dir,
             commands::open_index_dir,
             commands::file_icon,
@@ -150,6 +158,12 @@ pub fn run() {
                     &format!("注册 {toggle} 全局快捷键失败，可能被别的程序占用了: {err}"),
                 ),
             }
+
+            // 把 AppHandle 交给索引进度状态——之后每次建索引状态变化，它都能
+            // 驱动"索引窗口"（显示/隐藏 + 任务栏进度），见 indexing_status.rs
+            // 的 sync_window。
+            app.state::<IndexingStatus>()
+                .attach(app.handle().clone());
 
             let window = app
                 .get_webview_window("main")
@@ -195,6 +209,15 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // 索引进度窗口：点标题栏的关闭只隐藏不销毁——索引在后台线程继续跑，
+            // 窗口下次建索引时（sync_window）再弹出来。真退出走托盘菜单。
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "indexing" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+            }
             // 进程常驻，浮窗只是 show/hide：失焦即隐藏，符合 Spotlight/Raycast 的习惯，
             // 也避免用户切到别的窗口后浮窗还悬在最上层碍事。
             //
@@ -203,6 +226,13 @@ pub fn run() {
             // 注意这里只影响这一条自动隐藏路径——Esc（前端直接调
             // `getCurrentWindow().hide()`）和全局呼出快捷键的 `hide_window()`
             // 都不经过这里，固定状态不会拦住用户主动收起浮窗。
+            //
+            // fork 改动：这条失焦自动隐藏只作用于主窗口。索引窗口是独立的
+            // 任务栏窗口（可最小化、带进度），不该被"点别处就收起"影响——
+            // 否则建索引期间一碰主窗口，进度窗就被藏没了。
+            if window.label() != "main" {
+                return;
+            }
             if let WindowEvent::Focused(false) = event {
                 if window.state::<AutoHideSuppressor>().is_suppressed() {
                     return;

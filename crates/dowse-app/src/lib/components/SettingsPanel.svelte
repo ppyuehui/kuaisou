@@ -29,7 +29,8 @@
 	let {
 		roots,
 		onclose,
-		onrebuild
+		onrebuild,
+		oncreateindex
 	}: {
 		/** 已注册的全部索引根（display_path 清洗过）。"立即重建"只在恰好一个
 		 * 根时可用——`rebuild_index` 命令用单个目标目录整体替换索引，多根
@@ -40,6 +41,9 @@
 		/** 保存成功后触发一次重建——父组件负责实际调用 rebuild_index 并接管
 		 * 引导层展示，这里只管发出"该重建了"的意图。 */
 		onrebuild: () => void;
+		/** fork 新增："创建索引"入口——父组件负责弹目录选择器并启动建索引
+		 * （复用主窗口空态同一条路径）。 */
+		oncreateindex: () => void;
 	} = $props();
 
 	// 当前分区，默认停在「通用」。
@@ -56,6 +60,8 @@
 	let langChanged = $state(false); // 改过语言 → 显示"重启后生效"
 	// fork 新增：失焦自动隐藏开关，默认关（常驻窗口姿势）。
 	let autoHideOnBlur = $state(false);
+	// fork 新增：日志最低级别。
+	let logLevel = $state('info');
 
 	// ── 改键捕获态 ──────────────────────────────────────────────────────────
 	let capturing = $state(false); // 正在等用户按下新组合键
@@ -93,6 +99,13 @@
 	const ONOFF_OPTIONS = [
 		{ value: 'off', label: t.setOff },
 		{ value: 'on', label: t.setOn }
+	];
+	const LOG_LEVEL_OPTIONS = [
+		{ value: 'debug', label: t.setLogLevelDebug },
+		{ value: 'info', label: t.setLogLevelInfo },
+		{ value: 'warn', label: t.setLogLevelWarn },
+		{ value: 'error', label: t.setLogLevelError },
+		{ value: 'fatal', label: t.setLogLevelFatal }
 	];
 
 	// ── 索引规则区状态（原样迁入） ──────────────────────────────────────────
@@ -293,6 +306,16 @@
 		});
 	}
 
+	// ── 日志级别：即存即生效 ────────────────────────────────────────────────
+	function pickLogLevel(next: string) {
+		if (next === logLevel) return;
+		logLevel = next;
+		api.setLogLevel(next).catch((e) => {
+			logLevel = 'info';
+			console.error('setLogLevel failed', e);
+		});
+	}
+
 	// ── 打开数据文件夹：失败 toast 由按钮旁的状态行呈现 ────────────────────
 	let folderError = $state('');
 	async function openFolder(kind: 'log' | 'index') {
@@ -330,6 +353,7 @@
 				autostartEnabled = cfg.autostart_enabled;
 				lang = cfg.lang;
 				autoHideOnBlur = cfg.auto_hide_on_blur;
+				logLevel = cfg.log_level || 'info';
 			})
 			.catch(() => {
 				// 静默：通用区退回默认展示值即可。
@@ -514,6 +538,24 @@
 						(v) => pickAutoHide(v === 'on'),
 						false
 					)}
+				</div>
+			</div>
+
+			<!-- fork 新增：日志级别 -->
+			<div class="field">
+				<div class="field-inline">
+					<span class="field-label">{t.setLogLevelLabel}</span>
+					{@render segmented(LOG_LEVEL_OPTIONS, logLevel, pickLogLevel, false)}
+				</div>
+			</div>
+
+			<!-- fork 新增：创建索引入口（弹目录选择器，建索引在后台线程 +
+			     独立索引窗口里跑，主窗口不卡） -->
+			<div class="field">
+				<div class="folder-actions">
+					<button type="button" class="mini-btn primary" onclick={oncreateindex}>
+						{t.createIndex}
+					</button>
 				</div>
 			</div>
 

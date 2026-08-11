@@ -231,21 +231,35 @@ pub fn reveal_in_folder(_path: String) -> Result<(), String> {
 /// 文件夹…"复用/新选的目录）。实际工作全部在 `rebuild::perform_rebuild`
 /// 里——浮窗按钮、托盘两个菜单项三个入口共用同一份实现，行为保证一致。
 ///
+/// fork 改动：这个命令是 `async` 的，真正的建索引工作在
+/// `tauri::async_runtime::spawn_blocking` 里跑——原来的同步命令直接在 Tauri
+/// 主线程上阻塞几十秒，建索引期间主窗口整个"无响应"（拖不动、最小化都卡）。
+/// 改成后台线程后主窗口保持响应，进度事件照常推送，`RebuildGuard` 的独占
+/// 语义不变（begin/end 仍在命令里配对）。
+///
 /// 建索引期间通过 `dowse://rebuild-progress` 事件把进度实时推给前端（浮窗的
 /// "实时直播"效果），频率由 dowse 的 `PROGRESS_INTERVAL` 控制。
-/// `RebuildGuard` 防止这个命令和托盘的重建入口并发触发——已经有一次在跑
-/// 就直接报错，不会互相踩踏。
 #[tauri::command]
-pub fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto, String> {
-    if !app.state::<RebuildGuard>().try_begin() {
-        return Err("已有一次建索引正在进行中，请稍候".to_string());
+pub async fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto, String> {
+    {
+        let guard = app.state::<RebuildGuard>();
+        if !guard.try_begin() {
+            return Err("已有一次建索引正在进行中，请稍候".to_string());
+        }
     }
-    let target = PathBuf::from(&dir).canonicalize().map_err(|_| {
-        app.state::<RebuildGuard>().end();
-        "目录不存在".to_string()
-    })?;
-
-    let result = crate::rebuild::perform_rebuild(&app, target);
+    let target = match PathBuf::from(&dir).canonicalize() {
+        Ok(t) => t,
+        Err(_) => {
+            app.state::<RebuildGuard>().end();
+            return Err("目录不存在".to_string());
+        }
+    };
+    let app_for_work = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::rebuild::perform_rebuild(&app_for_work, target)
+    })
+    .await
+    .map_err(|e| format!("建索引线程异常：{e}"))?;
     app.state::<RebuildGuard>().end();
     result
 }
@@ -254,14 +268,24 @@ pub fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto
 /// 命令——跟 `rebuild_index` 是姊妹命令：都由 `rebuild::perform_*` 实现、
 /// 都用 `RebuildGuard` 防并发、都靠 `dowse://rebuild-progress` 事件直播进度，
 /// 唯一区别是这个不动现有索引内容，只对新根做一次目录树 upsert。
+///
+/// fork 改动：跟 `rebuild_index` 一样改成 async + 后台线程，避免建索引期间
+/// 主窗口无响应。
 #[tauri::command]
-pub fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto, String> {
-    if !app.state::<RebuildGuard>().try_begin() {
-        return Err("已有一次建索引正在进行中，请稍候".to_string());
+pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto, String> {
+    {
+        let guard = app.state::<RebuildGuard>();
+        if !guard.try_begin() {
+            return Err("已有一次建索引正在进行中，请稍候".to_string());
+        }
     }
     let target = PathBuf::from(&dir);
-
-    let result = crate::rebuild::perform_add_root(&app, target);
+    let app_for_work = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::rebuild::perform_add_root(&app_for_work, target)
+    })
+    .await
+    .map_err(|e| format!("建索引线程异常：{e}"))?;
     app.state::<RebuildGuard>().end();
     result
 }
@@ -325,9 +349,11 @@ pub struct SettingsDto {
     pub autostart_enabled: bool,
     pub lang: String,
     pub auto_hide_on_blur: bool,
+    pub log_level: String,
 }
 
-/// 设置面板打开时拉一次通用区的全部初值（改键/透明/自启/语言/失焦自动隐藏）。
+/// 设置面板打开时拉一次通用区的全部初值（改键/透明/自启/语言/失焦自动
+/// 隐藏/日志级别）。
 #[tauri::command]
 pub fn get_config(app: tauri::AppHandle) -> SettingsDto {
     let cfg = app.state::<ConfigState>().get();
@@ -339,6 +365,7 @@ pub fn get_config(app: tauri::AppHandle) -> SettingsDto {
         autostart_enabled,
         lang: cfg.lang,
         auto_hide_on_blur: cfg.auto_hide_on_blur,
+        log_level: cfg.log_level,
     }
 }
 
@@ -425,6 +452,16 @@ pub fn set_lang(config: State<ConfigState>, lang: String) -> Result<(), String> 
 #[tauri::command]
 pub fn set_auto_hide_on_blur(config: State<ConfigState>, enabled: bool) -> Result<(), String> {
     config.set_auto_hide_on_blur(enabled).map_err(|e| e.to_string())
+}
+
+/// 设置面板"日志级别"：先校验取值，再即时应用到日志过滤（`logging::set_min_level`
+/// 生效于下一次写日志），最后落盘——重启后 `run()` 也读同一份配置初始化。
+#[tauri::command]
+pub fn set_log_level(config: State<ConfigState>, level: String) -> Result<(), String> {
+    let parsed = crate::logging::LogLevel::parse(&level)
+        .ok_or_else(|| format!("不支持的日志级别：{level}"))?;
+    crate::logging::set_min_level(parsed);
+    config.set_log_level(level).map_err(|e| e.to_string())
 }
 
 /// 在资源管理器里打开日志文件夹（`%LOCALAPPDATA%\dowse\logs`），返回打开的

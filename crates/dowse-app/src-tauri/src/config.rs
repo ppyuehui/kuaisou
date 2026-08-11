@@ -37,6 +37,11 @@ pub struct AppConfig {
     /// 图钉（`AutoHideSuppressor`）是会话级的独立机制，两者互不冲突。
     #[serde(default = "default_auto_hide_on_blur")]
     pub auto_hide_on_blur: bool,
+    /// 日志最低级别（"debug"/"info"/"warn"/"error"/"fatal"），低于它的日志
+    /// 不写盘。默认 info——保持原行为。设置面板"日志级别"落盘这个字段，
+    /// 启动时 `run()` 读它初始化日志过滤。
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
     /// 界面语言覆盖："auto"（默认）跟随系统 UI 语言，保持 0.7.0 起"纯跟随
     /// 系统"的行为不变；"zh"/"en" 把界面钉死为中/英。设置面板"界面语言"写
     /// 这个字段。前端 `lib/i18n.ts` 和 Rust 托盘 `i18n.rs` 都在**启动时**读它
@@ -59,6 +64,11 @@ fn default_auto_hide_on_blur() -> bool {
     false
 }
 
+/// 默认日志级别 info——保持升级前的记录密度（升级前日志全量记录）。
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
 fn default_lang() -> String {
     "auto".to_string()
 }
@@ -73,6 +83,7 @@ impl Default for AppConfig {
             hotkey: default_hotkey(),
             lang: default_lang(),
             auto_hide_on_blur: default_auto_hide_on_blur(),
+            log_level: default_log_level(),
         }
     }
 }
@@ -158,6 +169,14 @@ impl ConfigState {
     pub fn set_auto_hide_on_blur(&self, enabled: bool) -> Result<()> {
         let mut guard = self.0.lock().expect("config mutex poisoned");
         guard.auto_hide_on_blur = enabled;
+        save(&guard)
+    }
+
+    /// 设置面板"日志级别"落盘。取值合法性（debug/info/warn/error/fatal）由
+    /// `commands::set_log_level` 把关，这里只管持久化。
+    pub fn set_log_level(&self, level: String) -> Result<()> {
+        let mut guard = self.0.lock().expect("config mutex poisoned");
+        guard.log_level = level;
         save(&guard)
     }
 

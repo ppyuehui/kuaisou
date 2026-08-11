@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
-	import { getCurrentWindow } from '@tauri-apps/api/window';
+	import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window';
 	import { open } from '@tauri-apps/plugin-dialog';
 	import { animate } from 'motion';
 
@@ -709,14 +709,48 @@
 
 	// 无边框窗口没有系统标题栏。搜索行的空白处充当拖动区域，但输入框、按钮
 	// 和菜单保留原本的点击行为，避免用户选文字或点筛选器时把窗口拖走。
-	function handleWindowDrag(e: MouseEvent) {
-		if (e.button !== 0 || e.detail > 1) return;
+	//
+	// fork 改动：Tauri 原生的 `startDragging()`（WM_NCLBUTTONDOWN + HTCAPTION
+	// 模态循环）在这台机器/这套透明无边框窗口上实测拖不动，改成手动拖拽——
+	// pointerdown 记下窗口起始位置，pointermove 里用 `setPosition` 跟随指针
+	// 位移（按 scaleFactor 把 CSS 像素换算成物理像素）。拖拽期间给搜索行设
+	// pointer capture，指针移出窗口边界后事件仍能持续送达。
+	let dragState: { wx: number; wy: number; sx: number; sy: number; scale: number } | null = null;
+
+	async function handleWindowDrag(e: PointerEvent) {
+		if (e.button !== 0) return;
 		const target = e.target;
 		if (!(target instanceof Element)) return;
-		if (target.closest('input, button, [role="button"], [role="menu"], [data-no-window-drag]')) return;
+		if (target.closest('input, button, [role="button"], [role="menu"], [data-no-window-drag], .window-resize-handle'))
+			return;
+		const win = getCurrentWindow();
+		try {
+			const [pos, scale] = await Promise.all([win.outerPosition(), win.scaleFactor()]);
+			dragState = { wx: pos.x, wy: pos.y, sx: e.clientX, sy: e.clientY, scale };
+			if (e.currentTarget instanceof Element) e.currentTarget.setPointerCapture(e.pointerId);
+			window.addEventListener('pointermove', handleDragMove);
+			window.addEventListener('pointerup', handleDragEnd);
+			window.addEventListener('pointercancel', handleDragEnd);
+			e.preventDefault();
+		} catch (err) {
+			console.error('start drag failed', err);
+		}
+	}
+
+	function handleDragMove(e: PointerEvent) {
+		if (!dragState) return;
+		const dx = (e.clientX - dragState.sx) * dragState.scale;
+		const dy = (e.clientY - dragState.sy) * dragState.scale;
 		getCurrentWindow()
-			.startDragging()
-			.catch((err) => console.error('startDragging failed', err));
+			.setPosition(new PhysicalPosition(dragState.wx + dx, dragState.wy + dy))
+			.catch((err) => console.error('setPosition failed', err));
+	}
+
+	function handleDragEnd() {
+		dragState = null;
+		window.removeEventListener('pointermove', handleDragMove);
+		window.removeEventListener('pointerup', handleDragEnd);
+		window.removeEventListener('pointercancel', handleDragEnd);
 	}
 
 	type ResizeDirection =
@@ -932,7 +966,7 @@
 		></div>
 	{/each}
 	<!-- svelte-ignore a11y_no_static_element_interactions: the blank title area maps to the native OS window-drag gesture; interactive descendants are excluded in handleWindowDrag -->
-	<div class="search-row" onmousedown={handleWindowDrag}>
+	<div class="search-row" onpointerdown={handleWindowDrag}>
 		<svg class="search-icon" width="20" height="20" viewBox="0 0 18 18" fill="none" aria-hidden="true">
 			<circle cx="8" cy="8" r="5.4" stroke="currentColor" stroke-width="1.4" />
 			<path d="M12.2 12.2 16 16" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
@@ -1104,6 +1138,10 @@
 			onrebuild={() => {
 				closeSettingsPanel();
 				rebuildCurrentIndex();
+			}}
+			oncreateindex={() => {
+				closeSettingsPanel();
+				pickDirectoryAndRebuild();
 			}}
 		/>
 	{/if}

@@ -100,6 +100,8 @@ export interface AppSettings {
 	lang: LangOption;
 	/** 失焦自动隐藏开关（默认关——fork 的常驻窗口姿势）。 */
 	auto_hide_on_blur: boolean;
+	/** 日志最低级别（debug/info/warn/error/fatal），低于它的日志不写盘。 */
+	log_level: string;
 }
 
 /// 面板可视不透明度的明/暗两套 CSS alpha（0~1），跟托盘"透明度"三档挂钩，

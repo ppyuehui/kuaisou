@@ -1,21 +1,82 @@
-//! 崩溃取证设施：把进程的 stdout/stderr 重定向到
-//! `%LOCALAPPDATA%\dowse\logs\dowse.log`（按体积轮转，2 个文件封顶），
-//! 再挂一个 panic hook 记下崩溃线程/位置/信息。
+//! 文件日志设施：仿 `C:\Users\hui\工作\Agent\自编软件\Logging\FileLogger.cs`
+//! 的轻量设计——5 个级别（Debug/Info/Warn/Error/Fatal）、按天分文件
+//! （`YYYY-MM-DD.log`）、只保留最近 7 天、可运行时调整最低级别（低于它的
+//! 日志不写盘）。日志目录仍固定在 `%LOCALAPPDATA%\dowse\logs`。
 //!
-//! release 构建用 `windows_subsystem = "windows"`（见 main.rs）没有控制台，
-//! 之前散布在 dowse/dowse-app 各处排障用的 `eprintln!`（写入端重试、
-//! 快慢车道降级、OCR 批次失败等）在生产环境里全部无声丢失——这里在进程
-//! 最开始把标准输出/错误句柄整体重定向到日志文件，不用逐个调用点改造成
-//! 显式记日志，覆盖率最高、改动量最小。必须在 `run()` 最开始调用。
-//!
-//! 只记生命周期/错误/降级事件，不记每次搜索——见 `log_line` 各调用点。
+//! 同时保留原设施的崩溃取证能力：把进程 stdout/stderr 重定向到"今天的日志
+//! 文件"，再挂 panic hook 记崩溃线程/位置/信息——dowse 库内部各处排障用的
+//! `eprintln!` 因此继续原样落进当天日志，不用逐个调用点改造。
 
-use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
-/// 单个日志文件的体积上限，超过就轮转。崩溃排查用的日志量不大，5MB 在正常
-/// 使用节奏下能覆盖相当长的运行时间。
-const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+/// 日志级别。排序即优先级：Debug < Info < Warn < Error < Fatal，
+/// `rank` 数字越小级别越低；"最低级别"过滤是"级别 >= 最低级别才写盘"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+}
+
+impl LogLevel {
+    /// 配置字符串 → 级别。只认小写英文名（serde 落盘的就是这些）。
+    pub fn parse(s: &str) -> Option<LogLevel> {
+        match s.to_ascii_lowercase().as_str() {
+            "debug" => Some(LogLevel::Debug),
+            "info" => Some(LogLevel::Info),
+            "warn" => Some(LogLevel::Warn),
+            "error" => Some(LogLevel::Error),
+            "fatal" => Some(LogLevel::Fatal),
+            _ => None,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Info => "INFO",
+            LogLevel::Warn => "WARN",
+            LogLevel::Error => "ERROR",
+            LogLevel::Fatal => "FATAL",
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        *self as u8
+    }
+}
+
+/// 当前最低日志级别（低于它的日志不写盘），运行时可通过 `set_min_level`
+/// 调整（设置面板"日志级别"落盘后即时生效）。默认 Debug——在 `init()` 之后
+/// 由 `run()` 读配置覆盖成用户选择的值。
+static MIN_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Debug as u8);
+
+/// 串行化所有日志文件写操作（同一个文件句柄的多线程追加）。
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// 日志目录（`init()` 时定死），None 表示还没初始化。
+static LOG_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// "今天"的日志文件句柄（`YYYY-MM-DD.log`），跨天时重新打开。
+static CURRENT_FILE: Mutex<Option<File>> = Mutex::new(None);
+
+/// CURRENT_FILE 对应的日期串，用于跨天判断。
+static CURRENT_DAY: Mutex<String> = Mutex::new(String::new());
+
+/// 保留天数：C# 版默认 7，这里保持一致。
+const KEEP_DAYS: u64 = 7;
+
+/// 运行时调整最低日志级别（低于它的日志不写盘）。设置面板改级别落盘后调用。
+pub fn set_min_level(level: LogLevel) {
+    MIN_LEVEL.store(level.rank(), Ordering::Relaxed);
+}
 
 /// 日志目录：`%LOCALAPPDATA%\dowse\logs`。`pub` 供设置面板"打开日志文件夹"
 /// （`commands::open_log_dir`）复用同一个路径来源，避免两处各写一份。
@@ -23,67 +84,107 @@ pub fn log_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "dowse").map(|dirs| dirs.data_local_dir().join("logs"))
 }
 
-fn log_file_path(dir: &Path) -> PathBuf {
-    dir.join("dowse.log")
-}
-
-/// 轮转：当前文件超过体积上限时，把它挪成 `.1`（覆盖旧的 `.1`），空出一个
-/// 全新的 `dowse.log`。总共只保留 2 个文件——够崩溃复盘用，不无限堆积。
-fn rotate_if_needed(dir: &Path) {
-    let current = log_file_path(dir);
-    let Ok(meta) = std::fs::metadata(&current) else {
-        return;
-    };
-    if meta.len() < MAX_LOG_BYTES {
-        return;
-    }
-    let rotated = dir.join("dowse.log.1");
-    let _ = std::fs::remove_file(&rotated);
-    let _ = std::fs::rename(&current, &rotated);
-}
-
-/// 初始化：建目录、按需轮转、打开日志文件、重定向 stdout/stderr、挂 panic hook。
-/// 任何一步失败都只是放弃日志能力，不影响应用正常启动——诊断设施本身不该
-/// 成为新的故障点。
+/// 初始化：建目录、清理过期日志、打开今天的文件、重定向 stdout/stderr、挂
+/// panic hook。任何一步失败都只是放弃日志能力，不影响应用正常启动——诊断设施
+/// 本身不该成为新的故障点。必须在 `run()` 最开始调用。
 pub fn init() {
     let Some(dir) = log_dir() else {
         return;
     };
-    if std::fs::create_dir_all(&dir).is_err() {
+    if fs::create_dir_all(&dir).is_err() {
         return;
     }
-    rotate_if_needed(&dir);
+    clean_old_logs(&dir);
 
-    let path = log_file_path(&dir);
-    let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
-        return;
-    };
+    *LOG_DIR.lock().expect("log dir mutex poisoned") = Some(dir);
+    ensure_day_file();
 
-    #[cfg(target_os = "windows")]
-    redirect_std_handles(&file);
-    // `SetStdHandle` only points the process-global STD_ERROR_HANDLE/
-    // STD_OUTPUT_HANDLE table entries at this handle *value*——it does not
-    // take ownership or bump any refcount. If `file` were allowed to drop
-    // normally here, `File::drop` would `CloseHandle` the very handle the OS
-    // table now points at, silently invalidating stdout/stderr for the rest
-    // of the process (every write after this function returns would fail
-    // quietly). Deliberately leak it: this log file's OS handle should live
-    // exactly as long as the process anyway, so skipping `Drop` here is the
-    // correct lifetime, not actually a leak in the harmful sense.
-    std::mem::forget(file);
-
-    log_line(
-        "startup",
-        &format!("dowse {} 启动", env!("CARGO_PKG_VERSION")),
-    );
+    log_line("startup", &format!("dowse {} 启动", env!("CARGO_PKG_VERSION")));
     install_panic_hook();
 }
 
-/// 把当前进程的 STD_OUTPUT_HANDLE / STD_ERROR_HANDLE 都指向日志文件的
-/// 底层 Win32 句柄——重定向之后，进程内任何地方（包括 dowse 的
-/// `eprintln!`）原样落进日志文件，不需要它们感知到日志系统的存在。
+/// 跨天切换"今天的文件"：日期没变就什么都不做。新开当天文件时顺带把
+/// stdout/stderr 重定向到新句柄（旧句柄已泄漏、OS 表里那项还能用，但既然
+/// 已经打开新的一天，就让它也指向新文件，保证 eprintln! 内容按天归位）。
+fn ensure_day_file() {
+    let dir = LOG_DIR.lock().expect("log dir mutex poisoned").clone();
+    let Some(dir) = dir else {
+        return;
+    };
+    let today = today_str();
+    let mut day_guard = CURRENT_DAY.lock().expect("log day mutex poisoned");
+    if *day_guard == today {
+        return;
+    }
+    let path = dir.join(format!("{today}.log"));
+    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
+        #[cfg(target_os = "windows")]
+        if let Ok(stdio) = file.try_clone() {
+            // 泄漏 stdio 句柄：SetStdHandle 只把表项指到这个句柄值，不接管
+            // 所有权；如果允许 drop，CloseHandle 会立刻让整条 stderr 失效。
+            redirect_std_handles(&stdio);
+            std::mem::forget(stdio);
+        }
+        *CURRENT_FILE.lock().expect("log file mutex poisoned") = Some(file);
+        *day_guard = today;
+    }
+}
+
+/// 记一行日志。`component` 是简短的来源标签（"startup"/"watch"/"rebuild"/
+/// "ocr"/"perf"/"panic"），`msg` 是人类可读的一句话。先过级别过滤，低于
+/// 当前最低级别的直接丢弃，不落盘也不做任何额外工作。
+///
+/// 克制使用：只记生命周期/错误/降级事件，不记每次搜索/每次文件事件——那些
+/// 量级太大，按天文件也会被几分钟撑爆。
+pub fn log_line_at(level: LogLevel, component: &str, msg: &str) {
+    if level.rank() < MIN_LEVEL.load(Ordering::Relaxed) {
+        return;
+    }
+    let line = format!("[{0}] [{1}] {2}: {3}", format_now(), component, level.name(), msg);
+    let _guard = WRITE_LOCK.lock().expect("log write lock poisoned");
+    ensure_day_file();
+    if let Some(file) = CURRENT_FILE.lock().expect("log file mutex poisoned").as_mut() {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// 缺省级别（Info）的日志入口——历史调用点（startup/perf/watch/ocr 等）原样
+/// 迁移，不用逐个改签名。真正需要不同级别的调用点用 `log_line_at`。
+pub fn log_line(component: &str, msg: &str) {
+    log_line_at(LogLevel::Info, component, msg);
+}
+
+/// 删除 `KEEP_DAYS` 天前的 `.log` 文件（按最后修改时间判断）。只在 `init()`
+/// 时跑一次，够了——过期文件不会因为不跑就爆炸。
+fn clean_old_logs(dir: &std::path::Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log") {
+            continue;
+        }
+        let keep_until = now
+            .checked_sub(std::time::Duration::from_secs(KEEP_DAYS * 86_400))
+            .unwrap_or(now);
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if let Ok(modified) = meta.modified() {
+            if modified < keep_until {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+/// 把当前进程的 STD_OUTPUT_HANDLE / STD_ERROR_HANDLE 都指向给定文件的底层
+/// Win32 句柄——重定向之后，进程内任何地方（包括 dowse 的 `eprintln!`）
+/// 原样落进日志文件。调用方负责 `mem::forget` 保持句柄有效。
 #[cfg(target_os = "windows")]
-fn redirect_std_handles(file: &std::fs::File) {
+fn redirect_std_handles(file: &File) {
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
@@ -95,9 +196,9 @@ fn redirect_std_handles(file: &std::fs::File) {
     }
 }
 
-/// 挂 panic hook：崩溃时把线程名、位置、payload 落一行日志（走的是上面
-/// 重定向过的 stderr），再链到系统默认 hook——开发时 `cargo tauri dev`
-/// 带控制台，原有的默认崩溃输出照样能看到，不丢失。
+/// 挂 panic hook：崩溃时把线程名、位置、payload 落一行 ERROR 日志（走的是
+/// 重定向过的 stderr），再链到系统默认 hook——开发时 `cargo tauri dev` 带
+/// 控制台，原有的默认崩溃输出照样能看到，不丢失。
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -113,7 +214,8 @@ fn install_panic_hook() {
             .map(|s| s.to_string())
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "<non-string panic payload>".to_string());
-        log_line(
+        log_line_at(
+            LogLevel::Error,
             "panic",
             &format!("线程 [{thread_name}] 在 {location} 崩溃: {payload}"),
         );
@@ -121,22 +223,11 @@ fn install_panic_hook() {
     }));
 }
 
-/// 记一行带时间戳的日志。`component` 是简短的来源标签（如 "watch"/"rebuild"/
-/// "ocr"/"panic"），`msg` 是人类可读的一句话。走 `eprintln!`——`init()` 已经把
-/// 进程 stderr 重定向到日志文件，这里不用关心底层是文件还是控制台。
-///
-/// 克制使用：只记生命周期/错误/降级事件（管线启停、重建开始/结束/失败、
-/// 写入端重试与降级、mutex poisoned 等），不记每次搜索/每次文件事件——
-/// 那些量级太大，5MB 的轮转窗口几分钟就会被挤爆，反而挤掉真正有用的记录。
-pub fn log_line(component: &str, msg: &str) {
-    eprintln!("[{}] [{component}] {msg}", format_now());
-}
-
 /// 不引入日期时间 crate，手写一个 UTC 时间戳格式化（Howard Hinnant 的
 /// civil_from_days 算法）——日志只是给人看的排障材料，精确到秒的 UTC
 /// 时间戳完全够用，没必要为了本地时区/多种格式拉一个新依赖。
 fn format_now() -> String {
-    let now = std::time::SystemTime::now()
+    let now = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs();
@@ -145,6 +236,16 @@ fn format_now() -> String {
     let (min, sec) = (rem / 60, rem % 60);
     let (year, month, day) = civil_from_days(days as i64);
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}:{sec:02} UTC")
+}
+
+/// 今天的日期串 `YYYY-MM-DD`，用作日志文件名。
+fn today_str() -> String {
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let days = (now.as_secs() / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// `days` = 自 1970-01-01 起的天数，返回 (year, month, day)。算法来自
@@ -176,5 +277,13 @@ mod tests {
     fn civil_from_days_known_date() {
         // 2024-01-01 是 epoch 之后第 19723 天。
         assert_eq!(civil_from_days(19_723), (2024, 1, 1));
+    }
+
+    #[test]
+    fn level_parse_and_rank() {
+        assert_eq!(LogLevel::parse("info"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::parse("ERROR"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::parse("verbose"), None);
+        assert!(LogLevel::Error.rank() > LogLevel::Info.rank());
     }
 }

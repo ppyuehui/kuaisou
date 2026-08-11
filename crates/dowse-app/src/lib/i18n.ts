@@ -144,9 +144,18 @@ interface Strings {
 	setLangRestartHint: string;
 	// 通用区 - 失焦自动隐藏（fork 新增：默认关，浮窗当常驻窗口用）
 	setAutoHideLabel: string;
+	// 通用区 - 日志级别（fork 新增：debug/info/warn/error/fatal）
+	setLogLevelLabel: string;
+	setLogLevelDebug: string;
+	setLogLevelInfo: string;
+	setLogLevelWarn: string;
+	setLogLevelError: string;
+	setLogLevelFatal: string;
 	// 通用区 - 打开数据文件夹（日志/索引）
 	openLogDir: string;
 	openIndexDir: string;
+	// 通用区 - 创建索引入口（fork 新增）
+	createIndex: string;
 	// 主窗口右上角图标按钮 tooltip（fork 新增）
 	winClose: string;
 	winSettings: string;
@@ -266,10 +275,17 @@ const zh: Strings = {
 	setLangEn: 'English',
 	setLangRestartHint: '重启后生效。',
 	setAutoHideLabel: '失焦自动隐藏',
+	setLogLevelLabel: '日志级别',
+	setLogLevelDebug: '调试',
+	setLogLevelInfo: '信息',
+	setLogLevelWarn: '警告',
+	setLogLevelError: '错误',
+	setLogLevelFatal: '致命',
 	openLogDir: '打开日志文件夹',
 	openIndexDir: '打开索引文件夹',
 	winClose: '隐藏窗口',
 	winSettings: '设置',
+	createIndex: '创建索引',
 	setOn: '开',
 	setOff: '关',
 	rpTitle: '索引规则',
@@ -384,10 +400,17 @@ const en: Strings = {
 	setLangEn: 'English',
 	setLangRestartHint: 'Takes effect after restart.',
 	setAutoHideLabel: 'Auto-hide on blur',
+	setLogLevelLabel: 'Log level',
+	setLogLevelDebug: 'Debug',
+	setLogLevelInfo: 'Info',
+	setLogLevelWarn: 'Warn',
+	setLogLevelError: 'Error',
+	setLogLevelFatal: 'Fatal',
 	openLogDir: 'Open log folder',
 	openIndexDir: 'Open index folder',
 	winClose: 'Hide window',
 	winSettings: 'Settings',
+	createIndex: 'Create index',
 	setOn: 'On',
 	setOff: 'Off',
 	rpTitle: 'Index rules',
