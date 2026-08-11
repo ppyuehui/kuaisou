@@ -17,8 +17,14 @@ anyhow = "1"
 # 安装包预算 15MB（设计文档："超了就是 bug"）。默认 release profile 只优化速度
 # 不管体积，实测裸 exe 就快 20MB 了——换成体积优先 + LTO + 去符号表，
 # 拿一点点搜索延迟换体积，80ms 的搜索预算本来就宽裕，够花。
+#
+# fork 改动（开发期）：把 release 的 LTO/体积优化关掉换编译速度——LTO + 单
+# 编译单元每次改代码都要全量链接几分钟，日常测试完全没法迭代。现在
+# opt-level=1 + 无 LTO + 16 编译单元，改一次代码十几秒就能出可测的包。
+# 发布正式版时把下面这些改回去（opt-level="s"、lto=true、codegen-units=1）
+# 即可恢复 15MB 体积预算。
 [profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
+opt-level = 1
+lto = false
+codegen-units = 16
 strip = true
