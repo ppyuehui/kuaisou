@@ -707,34 +707,32 @@
 		closeMenus();
 	}
 
-	// 无边框窗口没有系统标题栏。fork 版把整个窗口当拖动区：按下时只要落在
-	// 非交互元素上（输入框/按钮/下拉/菜单/缩放热区/设置遮罩等），就用指针事件
-	// + setPosition 手动拖动——原生的 startDragging（WM_NCLBUTTONDOWN 模态
-	// 循环）在这台机器的透明无边框窗口上实测失效，改成手动后拖动窗口任意空白
-	// 处都能用，不再只限搜索行。
+	// 无边框窗口没有系统标题栏。fork 版把整个窗口当拖动区：指针按下后只要
+	// 移动超过阈值（4px）就开始拖窗——所以连结果行的 <button>、搜索输入框这些
+	// 交互元素上按住拖动也一样能移窗；单纯点一下不越阈值，交给元素自己的点击
+	// 行为（选中结果/聚焦输入框），浏览器对拖出阈值的按压本来就不会派发 click。
+	// 原生的 startDragging（WM_NCLBUTTONDOWN 模态循环）在这台机器上实测失效，
+	// 只能手动 setPosition 跟随指针。
 	let dragState: { wx: number; wy: number; sx: number; sy: number; scale: number } | null = null;
 	let dragPointerId: number | null = null;
+	let dragArmed = false;
+	let dragMoveScheduled = false;
+	let dragMovePending: { x: number; y: number } | null = null;
 
 	function handleWindowDrag(e: PointerEvent) {
 		if (e.button !== 0) return;
 		const target = e.target;
 		if (!(target instanceof Element)) return;
-		if (
-			target.closest(
-				'input, button, a, textarea, select, [role="button"], [role="menu"], [data-no-window-drag], .window-resize-handle, .scrim, .card'
-			)
-		)
-			return;
-		// 同步做掉能做的：记录指针、抢 pointer capture（指针移出窗口后
-		// pointermove 仍能送达）、挂监听。窗口位置/缩放因子的查询是异步 IPC，
-		// 放到 then 里——查询返回前 dragState 为 null，move 直接忽略。
+		// 缩放热区、设置面板遮罩/卡片让它们自己处理，不参与拖窗判定。
+		if (target.closest('.window-resize-handle, .scrim, .card')) return;
 		dragPointerId = e.pointerId;
 		dragState = null;
-		if (e.currentTarget instanceof Element) e.currentTarget.setPointerCapture(e.pointerId);
+		dragArmed = false;
+		dragMoveScheduled = false;
+		dragMovePending = null;
 		window.addEventListener('pointermove', handleDragMove);
 		window.addEventListener('pointerup', handleDragEnd);
 		window.addEventListener('pointercancel', handleDragEnd);
-		e.preventDefault();
 
 		const sx = e.clientX;
 		const sy = e.clientY;
@@ -758,17 +756,38 @@
 		if (dragPointerId === null || e.pointerId !== dragPointerId) return;
 		const d = dragState;
 		if (!d) return;
-		const dx = (e.clientX - d.sx) * d.scale;
-		const dy = (e.clientY - d.sy) * d.scale;
-		getCurrentWindow()
-			.setPosition(new PhysicalPosition(d.wx + dx, d.wy + dy))
-			.catch(() => {});
+		// 未越过阈值前不启动拖动——让"点一下"继续走元素自己的点击。
+		if (!dragArmed) {
+			if (Math.abs(e.clientX - d.sx) < 4 && Math.abs(e.clientY - d.sy) < 4) return;
+			dragArmed = true;
+			document.body.style.userSelect = 'none';
+		}
+		// 按帧合并：一帧内多次 pointermove 只发一次 setPosition，避免 IPC 排队
+		// 造成光标被窗口甩开的那种滞后。
+		dragMovePending = {
+			x: d.wx + (e.clientX - d.sx) * d.scale,
+			y: d.wy + (e.clientY - d.sy) * d.scale
+		};
+		if (dragMoveScheduled) return;
+		dragMoveScheduled = true;
+		requestAnimationFrame(() => {
+			dragMoveScheduled = false;
+			const p = dragMovePending;
+			dragMovePending = null;
+			if (!p) return;
+			getCurrentWindow()
+				.setPosition(new PhysicalPosition(p.x, p.y))
+				.catch(() => {});
+		});
 	}
 
 	function handleDragEnd(e: PointerEvent) {
 		if (dragPointerId === null || e.pointerId !== dragPointerId) return;
 		dragPointerId = null;
 		dragState = null;
+		dragArmed = false;
+		dragMovePending = null;
+		document.body.style.userSelect = '';
 		window.removeEventListener('pointermove', handleDragMove);
 		window.removeEventListener('pointerup', handleDragEnd);
 		window.removeEventListener('pointercancel', handleDragEnd);
