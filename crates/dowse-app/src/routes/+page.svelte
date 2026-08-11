@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
-	import { getCurrentWindow, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window';
+	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { open } from '@tauri-apps/plugin-dialog';
 	import { animate } from 'motion';
 
@@ -707,189 +707,6 @@
 		closeMenus();
 	}
 
-	// 无边框窗口没有系统标题栏。fork 版把整个窗口当拖动区：指针按下后只要
-	// 移动超过阈值（4px）就开始拖窗——所以连结果行的 <button>、搜索输入框这些
-	// 交互元素上按住拖动也一样能移窗；单纯点一下不越阈值，交给元素自己的点击
-	// 行为（选中结果/聚焦输入框），浏览器对拖出阈值的按压本来就不会派发 click。
-	// 原生的 startDragging（WM_NCLBUTTONDOWN 模态循环）在这台机器上实测失效，
-	// 只能手动 setPosition 跟随指针。
-	let dragState: { wx: number; wy: number; sx: number; sy: number; scale: number } | null = null;
-	let dragPointerId: number | null = null;
-	let dragArmed = false;
-	let dragMoveScheduled = false;
-	let dragMovePending: { x: number; y: number } | null = null;
-
-	function handleWindowDrag(e: PointerEvent) {
-		if (e.button !== 0) return;
-		const target = e.target;
-		if (!(target instanceof Element)) return;
-		// 缩放热区、设置面板遮罩/卡片让它们自己处理，不参与拖窗判定。
-		if (target.closest('.window-resize-handle, .scrim, .card')) return;
-		dragPointerId = e.pointerId;
-		dragState = null;
-		dragArmed = false;
-		dragMoveScheduled = false;
-		dragMovePending = null;
-		window.addEventListener('pointermove', handleDragMove);
-		window.addEventListener('pointerup', handleDragEnd);
-		window.addEventListener('pointercancel', handleDragEnd);
-
-		const sx = e.clientX;
-		const sy = e.clientY;
-		getCurrentWindow()
-			.outerPosition()
-			.then((pos) =>
-				getCurrentWindow()
-					.scaleFactor()
-					.then((scale) => {
-						if (dragPointerId === e.pointerId) {
-							dragState = { wx: pos.x, wy: pos.y, sx, sy, scale };
-						}
-					})
-			)
-			.catch(() => {
-				dragState = null;
-			});
-	}
-
-	function handleDragMove(e: PointerEvent) {
-		if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-		const d = dragState;
-		if (!d) return;
-		// 未越过阈值前不启动拖动——让"点一下"继续走元素自己的点击。
-		if (!dragArmed) {
-			if (Math.abs(e.clientX - d.sx) < 4 && Math.abs(e.clientY - d.sy) < 4) return;
-			dragArmed = true;
-			document.body.style.userSelect = 'none';
-		}
-		// 按帧合并：一帧内多次 pointermove 只发一次 setPosition，避免 IPC 排队
-		// 造成光标被窗口甩开的那种滞后。
-		dragMovePending = {
-			x: d.wx + (e.clientX - d.sx) * d.scale,
-			y: d.wy + (e.clientY - d.sy) * d.scale
-		};
-		if (dragMoveScheduled) return;
-		dragMoveScheduled = true;
-		requestAnimationFrame(() => {
-			dragMoveScheduled = false;
-			const p = dragMovePending;
-			dragMovePending = null;
-			if (!p) return;
-			getCurrentWindow()
-				.setPosition(new PhysicalPosition(p.x, p.y))
-				.catch(() => {});
-		});
-	}
-
-	function handleDragEnd(e: PointerEvent) {
-		if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-		dragPointerId = null;
-		dragState = null;
-		dragArmed = false;
-		dragMovePending = null;
-		document.body.style.userSelect = '';
-		window.removeEventListener('pointermove', handleDragMove);
-		window.removeEventListener('pointerup', handleDragEnd);
-		window.removeEventListener('pointercancel', handleDragEnd);
-	}
-
-	type ResizeDirection =
-		| 'North'
-		| 'NorthEast'
-		| 'East'
-		| 'SouthEast'
-		| 'South'
-		| 'SouthWest'
-		| 'West'
-		| 'NorthWest';
-
-	// 无边框窗口也没有系统边框命中区。四边和四角各放一个透明热区。fork 改动：
-	// 原生的 startResizeDragging 跟 startDragging 一样在这台机器上失效，同样
-	// 改成手动——指针事件 + setPosition/setSize，按方向推算新尺寸/新位置。
-	const MIN_WIN_W = 640;
-	const MIN_WIN_H = 420;
-	let resizeState: {
-		sx: number;
-		sy: number;
-		px: number;
-		py: number;
-		w: number;
-		h: number;
-		scale: number;
-		dir: ResizeDirection;
-	} | null = null;
-	let resizePointerId: number | null = null;
-
-	function handleWindowResize(e: PointerEvent, dir: ResizeDirection) {
-		if (e.button !== 0) return;
-		e.preventDefault();
-		e.stopPropagation();
-		resizePointerId = e.pointerId;
-		resizeState = null;
-		if (e.currentTarget instanceof Element) e.currentTarget.setPointerCapture(e.pointerId);
-		window.addEventListener('pointermove', handleResizeMove);
-		window.addEventListener('pointerup', handleResizeEnd);
-		window.addEventListener('pointercancel', handleResizeEnd);
-
-		const sx = e.clientX;
-		const sy = e.clientY;
-		getCurrentWindow()
-			.outerPosition()
-			.then((pos) =>
-				getCurrentWindow()
-					.outerSize()
-					.then((sz) =>
-						getCurrentWindow()
-							.scaleFactor()
-							.then((scale) => {
-								if (resizePointerId === e.pointerId) {
-									resizeState = { sx, sy, px: pos.x, py: pos.y, w: sz.width, h: sz.height, scale, dir };
-								}
-							})
-					)
-			)
-			.catch(() => {
-				resizeState = null;
-			});
-	}
-
-	function handleResizeMove(e: PointerEvent) {
-		if (resizePointerId === null || e.pointerId !== resizePointerId) return;
-		const rs = resizeState;
-		if (!rs) return;
-		const dx = (e.clientX - rs.sx) * rs.scale;
-		const dy = (e.clientY - rs.sy) * rs.scale;
-		const dir = rs.dir;
-		let newW = rs.w;
-		let newH = rs.h;
-		let newX = rs.px;
-		let newY = rs.py;
-		if (dir.includes('East')) newW = Math.max(MIN_WIN_W, rs.w + dx);
-		if (dir.includes('West')) {
-			newW = Math.max(MIN_WIN_W, rs.w - dx);
-			newX = rs.px + (rs.w - newW);
-		}
-		if (dir.includes('South')) newH = Math.max(MIN_WIN_H, rs.h + dy);
-		if (dir.includes('North')) {
-			newH = Math.max(MIN_WIN_H, rs.h - dy);
-			newY = rs.py + (rs.h - newH);
-		}
-		getCurrentWindow()
-			.setPosition(new PhysicalPosition(newX, newY))
-			.catch(() => {});
-		getCurrentWindow()
-			.setSize(new PhysicalSize(newW, newH))
-			.catch(() => {});
-	}
-
-	function handleResizeEnd(e: PointerEvent) {
-		if (resizePointerId === null || e.pointerId !== resizePointerId) return;
-		resizePointerId = null;
-		resizeState = null;
-		window.removeEventListener('pointermove', handleResizeMove);
-		window.removeEventListener('pointerup', handleResizeEnd);
-		window.removeEventListener('pointercancel', handleResizeEnd);
-	}
 
 	function syncResultsWidth() {
 		if (!bodyEl) return;
@@ -1064,8 +881,10 @@
 	});
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions: the whole panel is a drag region for the frameless window; interactive descendants are excluded in handleWindowDrag -->
-<div class="panel" bind:this={panelEl} onpointerdown={handleWindowDrag}>
+<!-- svelte-ignore a11y_no_static_element_interactions: 窗口拖动/缩放由 Rust 侧
+     原生鼠标钩子处理（见 window_drag.rs），这里的热区 div 只负责悬停时显示
+     缩放光标 -->
+<div class="panel" bind:this={panelEl}>
 	{#each [
 		['North', 'n'],
 		['NorthEast', 'ne'],
@@ -1076,14 +895,10 @@
 		['West', 'w'],
 		['NorthWest', 'nw']
 	] as resizeHandle}
-		<!-- svelte-ignore a11y_no_static_element_interactions: these transparent edges expose the native OS resize gesture for a frameless window -->
-		<div
-			class="window-resize-handle window-resize-{resizeHandle[1]}"
-			onpointerdown={(e) => handleWindowResize(e, resizeHandle[0] as ResizeDirection)}
-			aria-hidden="true"
-		></div>
+		<!-- svelte-ignore a11y_no_static_element_interactions: these transparent edges show the resize cursor; actual resizing is handled by the native mouse hook -->
+		<div class="window-resize-handle window-resize-{resizeHandle[1]}" aria-hidden="true"></div>
 	{/each}
-	<!-- svelte-ignore a11y_no_static_element_interactions: interactive descendants are excluded in handleWindowDrag -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="search-row">
 		<svg class="search-icon" width="20" height="20" viewBox="0 0 18 18" fill="none" aria-hidden="true">
 			<circle cx="8" cy="8" r="5.4" stroke="currentColor" stroke-width="1.4" />

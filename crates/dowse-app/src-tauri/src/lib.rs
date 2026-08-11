@@ -12,6 +12,7 @@ mod rebuild;
 mod state;
 mod tray;
 mod watcher;
+mod window_drag;
 mod window_fx;
 
 use std::sync::Mutex;
@@ -168,6 +169,19 @@ pub fn run() {
             let window = app
                 .get_webview_window("main")
                 .expect("tauri.conf.json 里定义的 main 窗口应该存在");
+
+            // 原生拖动/缩放钩子：Tauri 的 startDragging 和前端指针事件在这台
+            // 机器上都不可靠（见 window_drag.rs 模块文档），主窗口创建后把句柄
+            // 交给系统层鼠标钩子，拖动/缩放从此不依赖 WebView 事件。
+            #[cfg(target_os = "windows")]
+            {
+                // tauri 依赖 windows 0.61、dowse-app 依赖 0.62，两个 HWND 是
+                // 不同版本的新类型；底层都是裸指针，取出来用 0.62 的类型包回。
+                let hwnd_raw = window.hwnd().expect("获取主窗口句柄失败").0;
+                let hwnd = windows::Win32::Foundation::HWND(hwnd_raw);
+                window_drag::set_min_size(hwnd, 640, 420);
+                window_drag::start(hwnd);
+            }
 
             // 结果行右键菜单（context_menu::show_result_context_menu）在这个窗口上
             // popup，选中项通过这里回调；托盘菜单是另一套独立的事件注册，见 tray.rs。
