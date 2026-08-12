@@ -26,6 +26,7 @@
 		errorMessage,
 		indexingProcessed = 0,
 		indexingCurrentFile = '',
+		indexingTotal = 0,
 		indexingReport = null,
 		roots = [],
 		history = [],
@@ -42,6 +43,8 @@
 		errorMessage?: string;
 		indexingProcessed?: number;
 		indexingCurrentFile?: string;
+		/** 文本阶段预估文件总数（建索引前预扫）。0 = 未知 → 退回不定态动画。 */
+		indexingTotal?: number;
 		indexingReport?: IndexReport | null;
 		/** 已注册的全部索引根（已过 display_path 清洗），空态逐行列出。 */
 		roots?: string[];
@@ -60,6 +63,11 @@
 	function formatSeconds(seconds: number): string {
 		return t.formatSeconds(seconds);
 	}
+
+	// 文本阶段真实进度百分比：有预扫总数就按 processed/total 算，0 表示未知。
+	let percent = $derived(
+		indexingTotal > 0 ? Math.min(100, Math.max(0, (indexingProcessed / indexingTotal) * 100)) : 0
+	);
 </script>
 
 <div class="empty">
@@ -114,14 +122,21 @@
 				<p class="sub">{t.esSkippedOversize(indexingReport.skippedOversize)}</p>
 			{/if}
 		{:else}
-			<!-- 阶段一：文本索引，总量未知。就是数字本身，不带"正在处理"之类的
-			     废话前缀。fork 改动：在数字下方加一条**不定态**动画进度条——总量
-			     未知时不能伪装成真实百分比，但一条滑动的细进度条能传达"正在跑、
-			     没卡死"的进行中状态，跟 OCR 阶段那条确定进度条（IndexingStrip）
-			     同一套视觉语言。 -->
+			<!-- 阶段一：文本索引。预扫过文件总数（indexingTotal > 0）时进度条是
+			     真实的：水蓝填充按 processed / total 前进，旁边跟一个百分比；
+			     没预扫到总数（托盘等路径）才退回不定态滑动动画，不伪造百分比。 -->
 			<p class="big-count mono"><AnimatedNumber value={indexingProcessed} /></p>
-			<p class="count-unit">{t.esCountUnit}</p>
-			<div class="indet-track" aria-hidden="true"></div>
+			<p class="count-unit">
+				{t.esCountUnit}
+				{#if percent > 0}
+					<span class="percent mono">{Math.round(percent)}%</span>
+				{/if}
+			</p>
+			<div class="progress" class:indeterminate={indexingTotal === 0} aria-hidden="true">
+				{#if indexingTotal > 0}
+					<div class="fill" style="width: {percent}%"></div>
+				{/if}
+			</div>
 			<div class="current-file-slot">
 				{#key indexingCurrentFile}
 					{#if indexingCurrentFile}
@@ -199,10 +214,17 @@
 		color: var(--fg-tertiary);
 	}
 
-	/* 阶段一的不定态进度条：细、圆角、一条水蓝滑动段往返扫过——总量未知
-	   不能报假百分比，但进行中的状态要给足。跟 IndexingStrip 的确定进度条
-	   同一套颜色（--accent-strong 段 / --row-hover 槽）。 */
-	.indet-track {
+	.percent {
+		margin-left: 6px;
+		color: var(--accent-strong);
+		font-weight: 500;
+	}
+
+	/* 文本阶段进度条：有预扫总数时是确定进度（水蓝填充按百分比前进，transition
+	   平滑），未知时退回不定态滑动动画。跟 IndexingStrip 的 OCR 进度条同一套
+	   颜色（--accent-strong 段 / --row-hover 槽）。 */
+	.progress {
+		position: relative;
 		width: 220px;
 		height: 4px;
 		margin: 2px 0 8px;
@@ -210,10 +232,16 @@
 		background: var(--row-hover);
 		border: 1px solid var(--panel-border);
 		overflow: hidden;
-		position: relative;
 	}
 
-	.indet-track::after {
+	.progress .fill {
+		height: 100%;
+		background: var(--accent-strong);
+		border-radius: 999px;
+		transition: width 200ms ease;
+	}
+
+	.progress.indeterminate::after {
 		content: '';
 		position: absolute;
 		top: 0;

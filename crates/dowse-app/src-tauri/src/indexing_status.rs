@@ -25,6 +25,10 @@ pub struct IndexingSnapshot {
     pub text_current_file: String,
     pub ocr_processed: usize,
     pub ocr_total: usize,
+    /// 文本阶段预估文件总数（建索引前由命令层预扫 `dowse::count_index_files`
+    /// 填进来），前端用它把 `text_processed / total` 渲染成真实进度百分比。
+    /// 0 表示未知（托盘路径没预扫），前端退回不定态动画。
+    pub total: usize,
 }
 
 /// 进程内常驻的建索引进度状态。写端是 `commands::rebuild_index`（文本阶段）
@@ -50,13 +54,25 @@ impl IndexingStatus {
             .clone()
     }
 
-    /// 全量重建开始：清空上一轮的状态，进入文本阶段。
+    /// 全量重建开始：清空上一轮的状态，进入文本阶段。命令层若已用
+    /// [`Self::set_total`] 预扫过文件总数，这里把它保留下来——否则 `Default`
+    /// 会把刚设好的分母清零，前端就退回不定态动画了。
     pub fn begin_text(&self) {
         let mut guard = self.0.lock().expect("indexing status mutex poisoned");
+        let total = guard.total;
         *guard = IndexingSnapshot {
             phase: IndexingPhase::Text,
+            total,
             ..Default::default()
         };
+    }
+
+    /// 建索引开始前由命令层预扫文件数得到的"这次要处理的总数"——文本阶段
+    /// 真实进度百分比的分母。必须在 `begin_text` 之前或之后立刻调用一次，
+    /// 放在快照里供前端读取；`total` 为 0 表示未知（前端退回不定态动画）。
+    pub fn set_total(&self, total: usize) {
+        let mut guard = self.0.lock().expect("indexing status mutex poisoned");
+        guard.total = total;
     }
 
     /// 文本阶段的一次进度汇报：累计处理数 + 当前文件，节奏跟

@@ -7,6 +7,7 @@
  * @property {IndexingPhase} phase
  * @property {number} textProcessed
  * @property {string} textCurrentFile
+ * @property {number} textTotal
  * @property {number} ocrProcessed
  * @property {number} ocrTotal
  */
@@ -21,6 +22,7 @@ export const idleIndexingView = {
 	phase: 'idle',
 	textProcessed: 0,
 	textCurrentFile: '',
+	textTotal: 0,
 	ocrProcessed: 0,
 	ocrTotal: 0
 };
@@ -43,7 +45,8 @@ export function reduceIndexingView(state, event) {
 			...state,
 			phase: 'text',
 			textProcessed: event.progress.processed,
-			textCurrentFile: event.progress.path
+			textCurrentFile: event.progress.path,
+			textTotal: event.progress.total ?? state.textTotal
 		};
 	}
 
@@ -52,6 +55,7 @@ export function reduceIndexingView(state, event) {
 		phase: snapshot.phase,
 		textProcessed: snapshot.phase === 'text' ? snapshot.text_processed : 0,
 		textCurrentFile: snapshot.phase === 'text' ? snapshot.text_current_file : '',
+		textTotal: snapshot.phase === 'text' ? snapshot.total ?? 0 : 0,
 		ocrProcessed: snapshot.phase === 'ocr' ? snapshot.ocr_processed : 0,
 		ocrTotal: snapshot.phase === 'ocr' ? snapshot.ocr_total : 0
 	};

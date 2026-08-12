@@ -52,6 +52,10 @@ impl RebuildGuard {
 pub struct IndexProgressDto {
     pub processed: usize,
     pub path: String,
+    /// 文本阶段预估文件总数（建索引前预扫，0=未知）。前端用它把
+    /// `processed/total` 渲染成真实进度百分比——事件每次带一份，比前端自己
+    /// 去查快照少一次 IPC。
+    pub total: usize,
 }
 
 #[derive(Serialize)]
@@ -119,6 +123,10 @@ pub fn perform_rebuild(app: &AppHandle, target: PathBuf) -> Result<IndexStatsDto
             IndexProgressDto {
                 processed: progress.processed,
                 path: display_path,
+                total: app_for_progress
+                    .state::<crate::indexing_status::IndexingStatus>()
+                    .snapshot()
+                    .total,
             },
         );
         crate::tray::refresh_tooltip(&app_for_progress);
@@ -242,6 +250,10 @@ pub fn perform_add_root(app: &AppHandle, target: PathBuf) -> Result<IndexStatsDt
                 IndexProgressDto {
                     processed: progress.processed,
                     path: display_path,
+                    total: app_for_progress
+                        .state::<crate::indexing_status::IndexingStatus>()
+                        .snapshot()
+                        .total,
                 },
             );
             crate::tray::refresh_tooltip(&app_for_progress);
@@ -352,6 +364,10 @@ pub fn perform_rebuild_root(app: &AppHandle, root: PathBuf) -> Result<IndexStats
                 IndexProgressDto {
                     processed: progress.processed,
                     path: display_path,
+                    total: app_for_progress
+                        .state::<crate::indexing_status::IndexingStatus>()
+                        .snapshot()
+                        .total,
                 },
             );
             crate::tray::refresh_tooltip(&app_for_progress);

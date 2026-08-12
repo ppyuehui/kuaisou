@@ -84,6 +84,8 @@
 	let indexingPhase = $state<IndexingPhase>('idle');
 	let indexingOcrProcessed = $state(0);
 	let indexingOcrTotal = $state(0);
+	/** 文本阶段预估文件总数（建索引前预扫），0 = 未知——真实进度百分比的分母。 */
+	let indexingTotal = $state(0);
 
 	function applyIndexingEvent(
 		event:
@@ -95,6 +97,7 @@
 				phase: indexingPhase,
 				textProcessed: indexingProcessed,
 				textCurrentFile: indexingCurrentFile,
+				textTotal: indexingTotal,
 				ocrProcessed: indexingOcrProcessed,
 				ocrTotal: indexingOcrTotal
 			},
@@ -105,6 +108,7 @@
 		indexingCurrentFile = next.textCurrentFile;
 		indexingOcrProcessed = next.ocrProcessed;
 		indexingOcrTotal = next.ocrTotal;
+		indexingTotal = next.textTotal;
 	}
 
 	// 本次搜索耗时（发起请求到结果上屏），页脚小字用；null 表示还没有可展示
@@ -996,6 +1000,7 @@
 				errorMessage={rebuildError}
 				{indexingProcessed}
 				{indexingCurrentFile}
+				{indexingTotal}
 				{indexingReport}
 				{roots}
 				{history}

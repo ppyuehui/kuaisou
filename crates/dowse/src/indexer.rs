@@ -107,6 +107,9 @@ pub(crate) fn walk_index_files(root: &Path) -> impl Iterator<Item = PathBuf> {
 /// [`walk_index_files`] 的纯函数版：排除判定接收显式规则，不碰进程级全局，
 /// 便于单测。规则用 `Arc` 传进来直接 move 进 `filter_entry` 闭包，让它随迭代器
 /// 存活整个遍历过程。
+/// [`walk_index_files`] 的纯函数版：排除目录等规则来自显式参数（`Arc`），
+/// 便于单测直接 move 进 `filter_entry` 闭包。这是建索引/补扫/对账共用的
+/// "哪些文件参与"判定。
 pub(crate) fn walk_index_files_with(
     root: &Path,
     rules: std::sync::Arc<crate::rules::IndexRules>,
@@ -125,6 +128,15 @@ pub(crate) fn walk_index_files_with(
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
+}
+
+/// 预估一次索引要处理的文件总数：快速目录遍历，只数文件、不做任何读取/抽取
+/// （几百毫秒到一两秒的量级）。建索引/补扫前先数一遍，GUI 拿它当文本阶段
+/// 真实进度百分比的分母——跟建索引共用同一套遍历规则（[`walk_index_files`]），
+/// 口径一致，`processed / total` 就是真实进度。非管理员慢路径和 MFT 快路径
+/// 枚举出的文件集合一致，用它做分母是稳的。
+pub fn count_index_files(root: &Path) -> usize {
+    walk_index_files(root).count()
 }
 
 /// 按卷能力探测选文件清单的产出方式：NTFS + 管理员权限就用 MFT 快速枚举，

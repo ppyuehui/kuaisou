@@ -50,6 +50,8 @@ export interface IndexRules {
 export interface IndexProgress {
 	processed: number;
 	path: string;
+	/** 文本阶段预估文件总数（建索引前预扫），0 表示未知——真实进度百分比的分母。 */
+	total: number;
 }
 
 export interface IndexStatus {
@@ -71,6 +73,8 @@ export interface IndexingSnapshot {
 	text_current_file: string;
 	ocr_processed: number;
 	ocr_total: number;
+	/** 文本阶段预估文件总数（建索引前预扫），0 表示未知——真实进度百分比的分母。 */
+	total: number;
 }
 
 /// 类型筛选下拉的取值，跟 Rust 侧 dowse-core::ext_groups::by_name 认的字符串一一对应。

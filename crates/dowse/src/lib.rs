@@ -102,7 +102,8 @@ mod watch;
 pub use events::{Debouncer, PendingChange, PendingOp, WatchEvent};
 pub use ext_groups::by_name as ext_group_by_name;
 pub use indexer::{
-    IndexProgress, IndexStats, rebuild_index, rebuild_index_with_progress, remove_dir_all_retrying,
+    IndexProgress, IndexStats, count_index_files, rebuild_index, rebuild_index_with_progress,
+    remove_dir_all_retrying,
 };
 pub use meta::registered_roots;
 pub use ocr::is_available;

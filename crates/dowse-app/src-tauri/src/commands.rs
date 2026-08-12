@@ -254,6 +254,10 @@ pub async fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexSt
             return Err("目录不存在".to_string());
         }
     };
+    // 预扫文件数：文本阶段真实进度百分比的分母（前端用 processed/total）。
+    // 数完才真正开扫，几百毫秒到一两秒的一次纯遍历，值得。
+    app.state::<IndexingStatus>()
+        .set_total(dowse::count_index_files(&target));
     let app_for_work = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         crate::rebuild::perform_rebuild(&app_for_work, target)
@@ -280,6 +284,9 @@ pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDt
         }
     }
     let target = PathBuf::from(&dir);
+    // 预扫文件数：文本阶段真实进度百分比的分母（同 rebuild_index）。
+    app.state::<IndexingStatus>()
+        .set_total(dowse::count_index_files(&target));
     let app_for_work = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         crate::rebuild::perform_add_root(&app_for_work, target)
