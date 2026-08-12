@@ -144,6 +144,11 @@
 	// 建索引完成标记：await addRoot/rebuildIndex 返回后置 true，之后迟到的
 	// rebuild-progress 事件不再把 phase 打回 'text'——防止引导层挡住搜索结果。
 	let scanDone = $state(false);
+	// 扫描序号：每次建索引开始时自增，超时回调用它判断"这次超时对应的还是不是
+	// 当前这次扫描"——比 `indexingReport !== report` 可靠（$state 对象是 Proxy，
+	// 与原始对象 `!==` 永远成立，那个守卫会把超时永远卡死）。数字是原始值，
+	// 不受 Proxy 影响。
+	let scanSeq = $state(0);
 
 	// 历史条目增删后夹紧选中下标，避免删空/删到末尾后指向一个不存在的位置。
 	$effect(() => {
@@ -328,6 +333,7 @@
 		indexingCurrentFile = '';
 		indexingReport = null;
 		scanDone = false;
+		const mySeq = ++scanSeq;
 		try {
 			const stats = await api.rebuildIndex(dir);
 			hasIndex = true;
@@ -346,7 +352,9 @@
 			};
 			indexingReport = report;
 			setTimeout(() => {
-				if (indexingReport !== report) return;
+				// 用 scanSeq 判断这次超时对应的还是不是当前扫描——比
+				// `indexingReport !== report` 可靠（$state 对象是 Proxy）。
+				if (scanSeq !== mySeq) return;
 				rebuildState = 'idle';
 				indexingReport = null;
 				// 防御（Issue：扫完停在"收录 N 篇"报告、搜索被挡）：完成报告
@@ -412,6 +420,7 @@
 		indexingCurrentFile = '';
 		indexingReport = null;
 		scanDone = false;
+		const mySeq = ++scanSeq;
 		try {
 			const stats = await api.addRoot(dir);
 			refreshIndexStatus();
@@ -424,7 +433,7 @@
 			};
 			indexingReport = report;
 			setTimeout(() => {
-				if (indexingReport !== report) return;
+				if (scanSeq !== mySeq) return;
 				rebuildState = 'idle';
 				indexingReport = null;
 				// 防御：同 rebuildWithDir——迟到的 rebuild-progress 事件可能把
