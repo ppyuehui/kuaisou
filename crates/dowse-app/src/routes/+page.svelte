@@ -339,6 +339,15 @@
 				if (indexingReport !== report) return;
 				rebuildState = 'idle';
 				indexingReport = null;
+				// 防御（Issue：扫完停在"收录 N 篇"报告、搜索被挡）：完成报告
+				// 停留期间，`await addRoot` 返回后仍可能收到最后几条迟到的
+				// `dowse://rebuild-progress` 事件，把 applyOcrPending 设好的
+				// 阶段又打回 'text'——引导层因此一直保持 'rebuilding' 挡着结果。
+				// 到这里报告该收尾了，强制把卡住的 'text' 归位：有 OCR 余量回
+				// 'ocr'（IndexingStrip 继续显示），否则回 'idle'。
+				if (indexingPhase === 'text') {
+					indexingPhase = indexingOcrTotal > 0 ? 'ocr' : 'idle';
+				}
 			}, 1800);
 		} catch (err) {
 			rebuildState = 'error';
@@ -406,6 +415,12 @@
 				if (indexingReport !== report) return;
 				rebuildState = 'idle';
 				indexingReport = null;
+				// 防御：同 rebuildWithDir——迟到的 rebuild-progress 事件可能把
+				// applyOcrPending 设好的阶段打回 'text'，让引导层挡着结果。
+				// 报告停留结束强制归位。
+				if (indexingPhase === 'text') {
+					indexingPhase = indexingOcrTotal > 0 ? 'ocr' : 'idle';
+				}
 			}, 1800);
 		} catch (err) {
 			rebuildState = 'error';
