@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -423,6 +425,16 @@ const REBUILD_RETRIES: u32 = 10;
 const REBUILD_RETRY_BASE_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 const REBUILD_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// 并行抽取的 worker 数：按可用核数封顶 8。核太少的机器（1 核）并行只有线程
+/// 切换开销，直接退回单线程；8 的上限是给 EDR/杀软实时扫描留余量（并发
+/// add_document 只写内存，真正落盘在 commit 一步，见 `rebuild_index_attempt`
+/// 里的说明），也避免高核机器上一口气起几十个线程互相抢时间片。
+fn extract_worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 8))
+        .unwrap_or(1)
+}
+
 /// 每次尝试用几个 tantivy 写入线程：并发建/删文件的规模越大，越容易撞上
 /// 扫描器（见 `rebuild_index_attempt` 里的解释）。第一次尝试按常规折中的
 /// 4 线程跑（吞吐还过得去），连续失败就说明这台机器眼下的扫描器压力偏大，
@@ -469,7 +481,7 @@ pub(crate) fn is_transient_writer_killed(err: &anyhow::Error) -> bool {
 pub fn rebuild_index_with_progress(
     index_dir: &Path,
     target_dir: &Path,
-    mut on_progress: impl FnMut(IndexProgress),
+    mut on_progress: impl FnMut(IndexProgress) + Send,
 ) -> Result<IndexStats> {
     // 开工前把这个索引目录旁的规则加载为进程级当前生效规则：底层的
     // walk_index_files/is_extractable/extract_text 都读全局，加载一次让本次
@@ -514,7 +526,7 @@ fn rebuild_index_attempt(
     index_dir: &Path,
     target_dir: &Path,
     writer_threads: usize,
-    on_progress: &mut impl FnMut(IndexProgress),
+    on_progress: &mut (impl FnMut(IndexProgress) + Send),
 ) -> Result<(usize, usize, usize, HashMap<VolumeKey, UsnCursor>)> {
     if index_dir.exists() {
         remove_dir_all_retrying(index_dir).context("清理旧索引目录失败")?;
@@ -538,33 +550,103 @@ fn rebuild_index_attempt(
     let mut writer: IndexWriter =
         index.writer_with_num_threads(writer_threads, 200 * 1024 * 1024)?;
 
-    let mut indexed = 0usize;
-    let mut skipped = 0usize;
-    let mut skipped_oversize = 0usize;
-
     // 按卷判定走 MFT 快速枚举还是现有的 walkdir 遍历（设计文档第一节）。
     // 两条路径产出的文件清单语义一致——下面的收录循环完全不用关心是哪条路径
     // 来的，这正是"上层感知不到差别"要的效果。
     let (files, usn_cursors) = collect_index_files(target_dir);
 
-    for path in files {
-        match add_file_document(&writer, &fields, &path, index_dir)? {
-            AddOutcome::Indexed => indexed += 1,
-            // 超限跳过既计入总跳过数，也单独累加一份明细。
-            AddOutcome::Skipped => skipped += 1,
-            AddOutcome::SkippedOversize => {
-                skipped += 1;
-                skipped_oversize += 1;
-            }
-        }
-        let processed = indexed + skipped;
-        if processed % PROGRESS_INTERVAL == 0 {
-            on_progress(IndexProgress {
-                processed,
-                path: path.clone(),
+    // ===== 并行收录 =====
+    // 抽取/建文档是 CPU 密集的（pdf_extract、zip+XML、jieba 分词），串行时
+    // 整个重建只吃一个核。这里按核数起 worker 池，用原子取号从 `files` 里
+    // 分派文件（负载自然均衡），并发调 `add_file_document`：
+    //   - `IndexWriter::add_document` 是 `&self`（Sync），多线程并发加文档是
+    //     tantivy 原生支持的，worker 之间共享同一个 `&writer`。
+    //   - 文件内容/字段这些临时数据都在各自 worker 的栈上，无共享可变状态，
+    //     只有计数器和首错槽位需要原子/互斥。
+    //   - 进度回调 `on_progress` 不是 Sync，用 `Arc<Mutex<&mut F>>` 让 worker
+    //     只在跨过 PROGRESS_INTERVAL 边界时轮流持锁调一次，不会成为瓶颈。
+    //
+    // EDR/杀软考量：抽取和 add_document 只写内存缓冲，真正落盘在 commit（后面
+    // 单独一步），不会像"多线程并发建/删文件"那样撞上实时扫描的敏感区——
+    // 那正是 `writer_threads_for_attempt` 把写入端线程压到 4 的原因，跟抽取
+    // worker 无关。真撞上瞬时中断仍由上层整次重试 + 写入线程数递减兜底。
+    let total = files.len();
+    let worker_count = extract_worker_count().min(total.max(1));
+    let next_idx = Arc::new(AtomicUsize::new(0));
+    let indexed = Arc::new(AtomicUsize::new(0));
+    let skipped = Arc::new(AtomicUsize::new(0));
+    let skipped_oversize = Arc::new(AtomicUsize::new(0));
+    let processed = Arc::new(AtomicUsize::new(0));
+    let first_err = Arc::new(Mutex::new(None));
+    let prog = Arc::new(Mutex::new(on_progress));
+
+    std::thread::scope(|s| {
+        for _ in 0..worker_count {
+            let next_idx = Arc::clone(&next_idx);
+            let indexed = Arc::clone(&indexed);
+            let skipped = Arc::clone(&skipped);
+            let skipped_oversize = Arc::clone(&skipped_oversize);
+            let processed = Arc::clone(&processed);
+            let first_err = Arc::clone(&first_err);
+            let prog = Arc::clone(&prog);
+            // worker 里只读共享数据：writer/fields/files/index_dir 都按共享引用
+            // 捕获（move 闭包只会复制这些 Copy 的引用，不会把原绑定挪走），
+            // scope 结束后主线程还能继续用 writer 做 commit。
+            let writer = &writer;
+            let fields = &fields;
+            let files = &files;
+            let index_dir = &index_dir;
+            s.spawn(move || {
+                loop {
+                    let i = next_idx.fetch_add(1, Ordering::Relaxed);
+                    if i >= total {
+                        break;
+                    }
+                    let path = &files[i];
+                    let outcome = match add_file_document(&writer, &fields, path, index_dir) {
+                        Ok(outcome) => outcome,
+                        Err(err) => {
+                            // 首个错误入槽，其余 worker 各自停止取号，scope 收尾后
+                            // 由主线程取出返回（语义跟串行版"第一个错误就中止"一致）。
+                            let mut slot = first_err.lock().unwrap_or_else(|e| e.into_inner());
+                            if slot.is_none() {
+                                *slot = Some(err);
+                            }
+                            break;
+                        }
+                    };
+                    match outcome {
+                        AddOutcome::Indexed => {
+                            indexed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        AddOutcome::Skipped => {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        AddOutcome::SkippedOversize => {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                            skipped_oversize.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if p % PROGRESS_INTERVAL == 0 {
+                        let mut guard = prog.lock().unwrap_or_else(|e| e.into_inner());
+                        guard(IndexProgress {
+                            processed: p,
+                            path: path.clone(),
+                        });
+                    }
+                }
             });
         }
+    });
+
+    // worker 里捕获的 `&mut on_progress` 随 scope 结束释放，计数器和首错取回主线程。
+    if let Some(err) = first_err.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        return Err(err);
     }
+    let indexed = indexed.load(Ordering::Relaxed);
+    let skipped = skipped.load(Ordering::Relaxed);
+    let skipped_oversize = skipped_oversize.load(Ordering::Relaxed);
 
     let ocr_queue = OcrQueue::for_index_dir(index_dir);
 
