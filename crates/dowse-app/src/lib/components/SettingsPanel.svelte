@@ -22,7 +22,7 @@
 
 	import { onMount, tick } from 'svelte';
 	import * as api from '../api';
-	import type { IndexRules, LangOption, TransparencyTier } from '../types';
+	import type { IndexRules, LangOption } from '../types';
 	import { t, LANG_OVERRIDE_KEY } from '../i18n';
 	import { formatHotkey } from '../hotkey';
 
@@ -57,8 +57,6 @@
 
 	// ── 通用区状态（初值从 get_config 拉一次） ──────────────────────────────
 	let hotkeyLabel = $state(''); // 展示用（formatHotkey 之后）
-	let transparencyEnabled = $state(true);
-	let tier = $state<TransparencyTier>('mid');
 	let autostartEnabled = $state(false);
 	let lang = $state<LangOption>('auto');
 	let langChanged = $state(false); // 改过语言 → 显示"重启后生效"
@@ -89,12 +87,7 @@
 		'OSRight'
 	]);
 
-	// 通用/透明/语言三组分段控件的选项表。
-	const TIER_OPTIONS: { value: TransparencyTier; label: string }[] = [
-		{ value: 'low', label: t.setTierLow },
-		{ value: 'mid', label: t.setTierMid },
-		{ value: 'high', label: t.setTierHigh }
-	];
+	// 通用/语言两组分段控件的选项表。
 	const LANG_OPTIONS: { value: LangOption; label: string }[] = [
 		{ value: 'auto', label: t.setLangAuto },
 		{ value: 'zh', label: t.setLangZh },
@@ -262,17 +255,7 @@
 		tick().then(() => cardEl?.focus());
 	}
 
-	// ── 透明 / 自启 / 语言：即存即生效，无"保存"按钮 ────────────────────────
-	function pickTransparency(on: boolean) {
-		transparencyEnabled = on;
-		api.setTransparencyEnabled(on).catch((e) => console.error('setTransparencyEnabled failed', e));
-	}
-
-	function pickTier(next: TransparencyTier) {
-		tier = next;
-		api.setTransparencyTier(next).catch((e) => console.error('setTransparencyTier failed', e));
-	}
-
+	// ── 自启 / 语言：即存即生效，无"保存"按钮 ──────────────────────────────
 	function pickAutostart(on: boolean) {
 		autostartEnabled = on;
 		api.setAutostart(on).catch((e) => {
@@ -363,8 +346,6 @@
 			.getConfig()
 			.then((cfg) => {
 				hotkeyLabel = formatHotkey(cfg.hotkey);
-				transparencyEnabled = cfg.transparency_enabled;
-				tier = cfg.transparency_tier;
 				autostartEnabled = cfg.autostart_enabled;
 				lang = cfg.lang;
 				autoHideOnBlur = cfg.auto_hide_on_blur;
@@ -500,23 +481,6 @@
 				{#if hotkeyMsg}
 					<p class="status">{hotkeyMsg}</p>
 				{/if}
-			</div>
-
-			<!-- 透明效果 + 透明度三档 -->
-			<div class="field">
-				<div class="field-inline">
-					<span class="field-label">{t.setTransparencyLabel}</span>
-					{@render segmented(
-						ONOFF_OPTIONS,
-						transparencyEnabled ? 'on' : 'off',
-						(v) => pickTransparency(v === 'on'),
-						false
-					)}
-				</div>
-				<div class="field-inline">
-					<span class="field-label sub">{t.setTierLabel}</span>
-					{@render segmented(TIER_OPTIONS, tier, (v) => pickTier(v as TransparencyTier), !transparencyEnabled)}
-				</div>
 			</div>
 
 			<!-- 开机自启 -->

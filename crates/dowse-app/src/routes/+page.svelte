@@ -9,7 +9,6 @@
 	import type {
 		EffectLevel,
 		ExtGroup,
-		GlassAlpha,
 		IndexingPhase,
 		IndexingSnapshot,
 		IndexProgress,
@@ -684,15 +683,6 @@
 		inputEl?.select();
 	}
 
-	// 面板可视不透明度收拢到这一个入口：两个数字（明/暗主题各一个 alpha）
-	// 直接写进 CSS 变量，具体哪个生效由 app.css 的 prefers-color-scheme
-	// 媒体查询决定，这里不用猜当前是明是暗。托盘切透明度档位时走
-	// dowse://glass-alpha 事件复用同一个函数。
-	function applyGlassAlpha(alpha: GlassAlpha) {
-		document.documentElement.style.setProperty('--glass-alpha-light', String(alpha.light));
-		document.documentElement.style.setProperty('--glass-alpha-dark', String(alpha.dark));
-	}
-
 	// 呼出的手感：轻微放大 + 淡入，全程压在 120ms 以内的弹簧物理，不是缓动曲线。
 	// 用显式 keyframe（而不是读当前样式）保证每次呼出都从同一个起点播，
 	// 不会因为上一次动画没播完就被打断而出现错位。
@@ -828,7 +818,6 @@
 		api.getEffectLevel().then((level: EffectLevel) => {
 			document.documentElement.dataset.effect = level;
 		});
-		api.getGlassAlpha().then(applyGlassAlpha);
 		api.getHotkey().then((raw) => {
 			hotkeyLabel = formatHotkey(raw);
 		});
@@ -862,9 +851,6 @@
 		});
 		const unlistenEffect = listen<EffectLevel>('dowse://effect-level', (evt) => {
 			document.documentElement.dataset.effect = evt.payload;
-		});
-		const unlistenGlassAlpha = listen<GlassAlpha>('dowse://glass-alpha', (evt) => {
-			applyGlassAlpha(evt.payload);
 		});
 		const unlistenRebuildDone = listen<number>('dowse://rebuild-done', (evt) => {
 			refreshIndexStatus();
@@ -910,7 +896,6 @@
 			document.removeEventListener('click', handleDocumentClick);
 			unlistenShown.then((f) => f());
 			unlistenEffect.then((f) => f());
-			unlistenGlassAlpha.then((f) => f());
 			unlistenRebuildDone.then((f) => f());
 			unlistenRebuildError.then((f) => f());
 			unlistenRootRemoved.then((f) => f());

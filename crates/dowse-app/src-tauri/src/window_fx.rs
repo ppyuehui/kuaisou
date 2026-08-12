@@ -346,27 +346,21 @@ fn clear_acrylic_effect(window: &WebviewWindow) {
 
 /// 材质降级链：Acrylic → Mica → 纯色。玻璃效果是锦上添花，
 /// 拿不到就退一级，绝不能让"要不到 Acrylic"变成窗口显示不出来。
-/// `transparency_enabled = false` 时（用户在托盘关了透明效果）直接落纯色。
+///
+/// fork 改动：透明度已固定为 Mid 档，不再有用户可调的三档/开关——设置面板
+/// 和托盘的透明度控制已移除，窗口玻璃固定用中档不透明度。
 ///
 /// 注意：`apply_acrylic_effect`/`window.set_effects(..).is_ok()` 只反映
 /// "把请求发给了 DWM"，不反映材质是否真的生效——Tauri 内部把
 /// `DwmSetWindowAttribute` 的 HRESULT 直接丢掉了，永远返回 `Ok`。所以这条链
 /// 天然测不出"申请到了但显示成纯色"这种情况，远程会话就是最典型的例子，
 /// 得单独识别、单独处理。
-pub fn apply_with_fallback(
-    window: &WebviewWindow,
-    transparency_enabled: bool,
-    tier: TransparencyTier,
-) -> EffectLevel {
+pub fn apply_with_fallback(window: &WebviewWindow) -> EffectLevel {
     // 圆角裁切跟材质降级链无关，纯色兜底和远程会话也一样受益，最前面无条件做一次。
     #[cfg(target_os = "windows")]
     apply_rounded_corners(window);
 
-    if !transparency_enabled {
-        clear_acrylic_effect(window);
-        eprintln!("材质降级：用户在托盘关闭了透明效果，直接落纯色");
-        return EffectLevel::Solid;
-    }
+    let tier = TransparencyTier::Mid;
 
     if is_remote_session() {
         // v0.6.0 曾经在这里预判"远程会话一律强制报告 Solid"，v0.6.1 撤销了这个

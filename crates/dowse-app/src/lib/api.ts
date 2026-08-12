@@ -3,7 +3,6 @@ import type {
 	AppSettings,
 	EffectLevel,
 	ExtGroup,
-	GlassAlpha,
 	IndexingSnapshot,
 	IndexRules,
 	IndexStats,
@@ -11,8 +10,7 @@ import type {
 	LangOption,
 	PreviewResult,
 	SearchHit,
-	SortOption,
-	TransparencyTier
+	SortOption
 } from './types';
 
 export function indexStatus(): Promise<IndexStatus> {
@@ -66,10 +64,6 @@ export function removeRoot(dir: string): Promise<{ removed: number }> {
 
 export function getEffectLevel(): Promise<EffectLevel> {
 	return invoke('get_effect_level');
-}
-
-export function getGlassAlpha(): Promise<GlassAlpha> {
-	return invoke('get_glass_alpha');
 }
 
 /// 当前生效的全局呼出快捷键，`tauri-plugin-global-shortcut` 的原始格式
@@ -152,16 +146,6 @@ export function getConfig(): Promise<AppSettings> {
 /// 程序占用）时 Promise reject，错误文案里说清楚——Rust 侧已回滚到旧键。
 export function setHotkey(hotkey: string): Promise<void> {
 	return invoke('set_hotkey', { hotkey });
-}
-
-/// 设置面板"透明效果"开关——复用托盘同一条命令路径，托盘勾选态与面板同步。
-export function setTransparencyEnabled(enabled: boolean): Promise<void> {
-	return invoke('set_transparency_enabled', { enabled });
-}
-
-/// 设置面板"透明度"三档——复用托盘同一条命令路径。
-export function setTransparencyTier(tier: TransparencyTier): Promise<void> {
-	return invoke('set_transparency_tier', { tier });
 }
 
 /// 设置面板"开机自启"——复用托盘同一条命令路径。系统拒绝写自启项时 reject，

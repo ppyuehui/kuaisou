@@ -129,14 +129,11 @@ pub fn run() {
             commands::add_root,
             commands::remove_root,
             commands::get_effect_level,
-            commands::get_glass_alpha,
             commands::get_hotkey,
             commands::get_rules,
             commands::set_rules,
             commands::get_config,
             commands::set_hotkey,
-            commands::set_transparency_enabled,
-            commands::set_transparency_tier,
             commands::set_autostart,
             commands::set_lang,
             commands::set_auto_hide_on_blur,
@@ -183,11 +180,7 @@ pub fn run() {
             window.on_menu_event(context_menu::handle_context_menu_event);
 
             let cfg = app.state::<ConfigState>().get();
-            let level = window_fx::apply_with_fallback(
-                &window,
-                cfg.transparency_enabled,
-                cfg.transparency_tier,
-            );
+            let level = window_fx::apply_with_fallback(&window);
             app.manage(EffectLevelState::new(level));
             let _ = window_fx::position_upper_center(&window);
 
