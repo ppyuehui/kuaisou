@@ -1,9 +1,13 @@
 <script lang="ts">
 	// fork 新增：独立的"索引进度窗口"页面（窗口 label="indexing"）。
 	// 建索引是后台线程，主窗口不再卡死；这个窗口负责把进度可视化——文本阶段
-	// 显示"已处理数 + 当前文件"，OCR 阶段显示带比例的进度条。窗口可最小化，
-	// 任务栏按钮上的进度由 Rust 侧（indexing_status.rs::sync_window）用
-	// set_progress_bar 驱动，这里只管窗口内部的内容。
+	// 显示"已处理数 + 当前文件"（总量未知，不定态进度条），OCR 阶段显示带
+	// 比例的进度条。窗口可最小化，任务栏按钮上的进度由 Rust 侧
+	// （indexing_status.rs::sync_window）用 set_progress_bar 驱动，这里只管
+	// 窗口内部的内容。
+	//
+	// 视觉跟主窗口同一套 CSS 变量（app.css 的 --solid-bg / --accent-* /
+	// --fg-* / --panel-border …），跟随系统明暗主题。
 	//
 	// 数据来源跟主窗口完全一致：挂载时拉一次快照（indexing_status 命令），
 	// 之后靠既有事件流续播（rebuild-progress / ocr-progress / indexing-settled /
@@ -33,6 +37,14 @@
 		text: '正在建索引',
 		ocr: '图片识别'
 	};
+
+	let ocrPercent = $derived(
+		snapshot.phase === 'ocr' && snapshot.ocr_total > 0
+			? Math.round((snapshot.ocr_processed / snapshot.ocr_total) * 100)
+			: 0
+	);
+	// 文本阶段总量未知：已处理数直接展示。
+	let busy = $derived(snapshot.phase !== 'idle');
 
 	onMount(() => {
 		api.indexingStatus().then(applySnap).catch(() => {});
@@ -74,19 +86,13 @@
 			unlisten.forEach((u) => u.then((f) => f()));
 		};
 	});
-
-	let ocrPercent = $derived(
-		snapshot.phase === 'ocr' && snapshot.ocr_total > 0
-			? Math.round((snapshot.ocr_processed / snapshot.ocr_total) * 100)
-			: 0
-	);
 </script>
 
 <div class="win">
 	<div class="head">
-		<span class="dot" class:active={snapshot.phase !== 'idle'}></span>
+		<span class="dot" class:active={busy}></span>
 		<span class="title">dowse</span>
-		<span class="phase">{snapshot.phase !== 'idle' ? (PHASE_LABEL[snapshot.phase] ?? '') : ''}</span>
+		<span class="phase">{busy ? (PHASE_LABEL[snapshot.phase] ?? '') : ''}</span>
 	</div>
 
 	{#if errorText}
@@ -101,7 +107,7 @@
 	{:else if snapshot.phase === 'text'}
 		<div class="bar indeterminate"></div>
 		<div class="meta">
-			<span>已处理 {snapshot.text_processed} 个文件</span>
+			<span>已处理 <b>{snapshot.text_processed}</b> 个文件</span>
 			<span class="file" title={snapshot.text_current_file}>{snapshot.text_current_file || '…'}</span>
 		</div>
 	{:else}
@@ -113,30 +119,31 @@
 	.win {
 		display: flex;
 		flex-direction: column;
-		gap: 14px;
-		padding: 16px 18px;
-		box-sizing: border-box;
+		gap: 16px;
+		padding: 20px 22px;
 		height: 100vh;
-		font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-		background: #f3f3f3;
-		color: #1f2328;
+		background: var(--solid-bg);
+		color: var(--fg-primary);
+		overflow: hidden;
 	}
 
 	.head {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 9px;
 	}
 
 	.dot {
-		width: 8px;
-		height: 8px;
+		width: 9px;
+		height: 9px;
 		border-radius: 50%;
-		background: #b0b7c0;
+		background: var(--fg-tertiary);
+		transition: background-color 0.15s ease-out;
 	}
 
 	.dot.active {
-		background: #1f8a4c;
+		background: var(--accent-strong);
+		box-shadow: 0 0 0 3px var(--accent-soft);
 		animation: pulse 1.2s ease-in-out infinite;
 	}
 
@@ -146,55 +153,55 @@
 			opacity: 1;
 		}
 		50% {
-			opacity: 0.4;
+			opacity: 0.45;
 		}
 	}
 
 	.title {
-		font-size: 13px;
+		font-size: 13.5px;
 		font-weight: 600;
+		letter-spacing: 0.01em;
 	}
 
 	.phase {
 		margin-left: auto;
 		font-size: 12px;
-		color: #57606a;
+		font-weight: 500;
+		color: var(--accent-strong);
 	}
 
 	.bar {
 		width: 100%;
-		height: 8px;
-		border-radius: 4px;
-		background: #d8dee4;
+		height: 6px;
+		border-radius: 999px;
+		background: var(--row-hover);
+		border: 1px solid var(--panel-border);
 		overflow: hidden;
+		position: relative;
 	}
 
 	.fill {
 		height: 100%;
-		background: #1f8a4c;
-		border-radius: 4px;
+		background: var(--accent-strong);
+		border-radius: 999px;
 		transition: width 0.15s ease-out;
-	}
-
-	.bar.indeterminate {
-		position: relative;
 	}
 
 	.bar.indeterminate::after {
 		content: '';
 		position: absolute;
 		top: 0;
-		left: -40%;
-		width: 40%;
+		left: -35%;
+		width: 35%;
 		height: 100%;
-		background: #1f8a4c;
-		border-radius: 4px;
+		background: var(--accent-strong);
+		border-radius: 999px;
 		animation: slide 1.1s ease-in-out infinite;
 	}
 
 	@keyframes slide {
 		0% {
-			left: -40%;
+			left: -35%;
 		}
 		100% {
 			left: 100%;
@@ -204,35 +211,42 @@
 	.meta {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
-		font-size: 12px;
-		color: #57606a;
+		gap: 7px;
+		font-size: 12.5px;
+		color: var(--fg-secondary);
+	}
+
+	.meta b {
+		font-weight: 600;
+		color: var(--fg-primary);
 	}
 
 	.file {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--fg-tertiary);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		direction: rtl;
 		text-align: left;
-		font-size: 11px;
-		color: #8b949e;
 	}
 
 	.status {
 		font-size: 13px;
-		padding: 8px 0;
+		padding: 4px 0;
+		color: var(--fg-secondary);
 	}
 
 	.status.idle {
-		color: #8b949e;
+		color: var(--fg-tertiary);
 	}
 
 	.status.ok {
-		color: #1f8a4c;
+		color: var(--accent-strong);
 	}
 
 	.status.error {
-		color: #cf222e;
+		color: var(--fg-secondary);
 	}
 </style>
