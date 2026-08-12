@@ -92,6 +92,11 @@
 			| { type: 'text-progress'; progress: IndexProgress }
 			| { type: 'snapshot'; snapshot: IndexingSnapshot }
 	) {
+		if (event.type === 'text-progress' && scanDone) {
+			// invoke 已返回后的迟到 progress 事件：忽略，不再把 phase 打回
+			// 'text'——否则引导层会一直挡着搜索结果。
+			return;
+		}
 		const next = reduceIndexingView(
 			{
 				phase: indexingPhase,
@@ -136,6 +141,9 @@
 	let history = $state<string[]>([]);
 	let historyIndex = $state(0);
 	let historyMode = $derived(query.trim().length === 0 && history.length > 0);
+	// 建索引完成标记：await addRoot/rebuildIndex 返回后置 true，之后迟到的
+	// rebuild-progress 事件不再把 phase 打回 'text'——防止引导层挡住搜索结果。
+	let scanDone = $state(false);
 
 	// 历史条目增删后夹紧选中下标，避免删空/删到末尾后指向一个不存在的位置。
 	$effect(() => {
@@ -319,10 +327,12 @@
 		indexingProcessed = 0;
 		indexingCurrentFile = '';
 		indexingReport = null;
+		scanDone = false;
 		try {
 			const stats = await api.rebuildIndex(dir);
 			hasIndex = true;
 			refreshIndexStatus();
+			scanDone = true;
 			// 文本阶段结束，交接给 OCR 阶段（如果还有图片没识别完）——不等
 			// 第一个 `dowse://ocr-progress` 事件，直接用这次 invoke 返回的
 			// 初始值起播，衔接文本直播 → 完成报告 → 图片余量递减的完整时间线。
@@ -401,9 +411,11 @@
 		indexingProcessed = 0;
 		indexingCurrentFile = '';
 		indexingReport = null;
+		scanDone = false;
 		try {
 			const stats = await api.addRoot(dir);
 			refreshIndexStatus();
+			scanDone = true;
 			applyOcrPending(stats.ocr_pending);
 			const report = {
 				indexed: stats.indexed,
