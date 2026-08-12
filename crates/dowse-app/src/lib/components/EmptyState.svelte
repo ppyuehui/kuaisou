@@ -115,10 +115,13 @@
 			{/if}
 		{:else}
 			<!-- 阶段一：文本索引，总量未知。就是数字本身，不带"正在处理"之类的
-			     废话前缀；不放进度条/百分比——总量未知时装作知道进度是廉价感的
-			     重灾区，也不放转圈 spinner。 -->
+			     废话前缀。fork 改动：在数字下方加一条**不定态**动画进度条——总量
+			     未知时不能伪装成真实百分比，但一条滑动的细进度条能传达"正在跑、
+			     没卡死"的进行中状态，跟 OCR 阶段那条确定进度条（IndexingStrip）
+			     同一套视觉语言。 -->
 			<p class="big-count mono"><AnimatedNumber value={indexingProcessed} /></p>
 			<p class="count-unit">{t.esCountUnit}</p>
+			<div class="indet-track" aria-hidden="true"></div>
 			<div class="current-file-slot">
 				{#key indexingCurrentFile}
 					{#if indexingCurrentFile}
@@ -194,6 +197,41 @@
 		margin: 0 0 4px;
 		font-size: 12px;
 		color: var(--fg-tertiary);
+	}
+
+	/* 阶段一的不定态进度条：细、圆角、一条水蓝滑动段往返扫过——总量未知
+	   不能报假百分比，但进行中的状态要给足。跟 IndexingStrip 的确定进度条
+	   同一套颜色（--accent-strong 段 / --row-hover 槽）。 */
+	.indet-track {
+		width: 220px;
+		height: 4px;
+		margin: 2px 0 8px;
+		border-radius: 999px;
+		background: var(--row-hover);
+		border: 1px solid var(--panel-border);
+		overflow: hidden;
+		position: relative;
+	}
+
+	.indet-track::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		left: -35%;
+		width: 35%;
+		height: 100%;
+		background: var(--accent-strong);
+		border-radius: 999px;
+		animation: indet-slide 1.2s ease-in-out infinite;
+	}
+
+	@keyframes indet-slide {
+		0% {
+			left: -35%;
+		}
+		100% {
+			left: 100%;
+		}
 	}
 
 	/* 固定高度的槽位：文件名一行流过时用 fade 进出，占位高度不随有无内容
