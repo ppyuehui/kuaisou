@@ -161,12 +161,6 @@ pub fn run() {
                 ),
             }
 
-            // 把 AppHandle 交给索引进度状态——之后每次建索引状态变化，它都能
-            // 驱动"索引窗口"（显示/隐藏 + 任务栏进度），见 indexing_status.rs
-            // 的 sync_window。
-            app.state::<IndexingStatus>()
-                .attach(app.handle().clone());
-
             let window = app
                 .get_webview_window("main")
                 .expect("tauri.conf.json 里定义的 main 窗口应该存在");
@@ -224,15 +218,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 索引进度窗口：点标题栏的关闭只隐藏不销毁——索引在后台线程继续跑，
-            // 窗口下次建索引时（sync_window）再弹出来。真退出走托盘菜单。
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "indexing" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    return;
-                }
-            }
             // 进程常驻，浮窗只是 show/hide：失焦即隐藏，符合 Spotlight/Raycast 的习惯，
             // 也避免用户切到别的窗口后浮窗还悬在最上层碍事。
             //
@@ -241,10 +226,6 @@ pub fn run() {
             // 注意这里只影响这一条自动隐藏路径——Esc（前端直接调
             // `getCurrentWindow().hide()`）和全局呼出快捷键的 `hide_window()`
             // 都不经过这里，固定状态不会拦住用户主动收起浮窗。
-            //
-            // fork 改动：这条失焦自动隐藏只作用于主窗口。索引窗口是独立的
-            // 任务栏窗口（可最小化、带进度），不该被"点别处就收起"影响——
-            // 否则建索引期间一碰主窗口，进度窗就被藏没了。
             if window.label() != "main" {
                 return;
             }
