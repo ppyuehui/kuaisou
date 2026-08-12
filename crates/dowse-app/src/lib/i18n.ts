@@ -128,6 +128,7 @@ interface Strings {
 	setHotkeyNeedModifier: string;
 	setHotkeySaved: string;
 	setHotkeyFailed: (err: string) => string;
+	setHotkeyConflict: string;
 	// 通用区 - 开机自启
 	setAutostartLabel: string;
 	// 通用区 - 界面语言
@@ -145,6 +146,11 @@ interface Strings {
 	setLogLevelWarn: string;
 	setLogLevelError: string;
 	setLogLevelFatal: string;
+	// 通用区 - 深色模式（fork 新增：跟随系统/浅色/深色，热切换）
+	setThemeLabel: string;
+	setThemeAuto: string;
+	setThemeLight: string;
+	setThemeDark: string;
 	// 通用区 - 打开数据文件夹（日志/索引）
 	openLogDir: string;
 	openIndexDir: string;
@@ -158,6 +164,9 @@ interface Strings {
 	// 主窗口右上角图标按钮 tooltip（fork 新增）
 	winClose: string;
 	winSettings: string;
+	winMinimize: string;
+	winMaximize: string;
+	winRestore: string;
 	// 通用区 - 开/关两态（透明/自启共用）
 	setOn: string;
 	setOff: string;
@@ -260,6 +269,7 @@ const zh: Strings = {
 	setHotkeyConfirm: '确认',
 	setHotkeyCancel: '取消',
 	setHotkeyNeedModifier: '至少需要一个修饰键（Ctrl / Alt / Shift / Win）。',
+	setHotkeyConflict: '该组合键已被其它程序占用，换一个吧。',
 	setHotkeySaved: '快捷键已更新。',
 	setHotkeyFailed: (err) => `改键失败：${err}`,
 	setAutostartLabel: '开机自启',
@@ -275,10 +285,17 @@ const zh: Strings = {
 	setLogLevelWarn: '警告',
 	setLogLevelError: '错误',
 	setLogLevelFatal: '致命',
+	setThemeLabel: '深色模式',
+	setThemeAuto: '跟随系统',
+	setThemeLight: '浅色',
+	setThemeDark: '深色',
 	openLogDir: '打开日志文件夹',
 	openIndexDir: '打开索引文件夹',
 	winClose: '隐藏窗口',
 	winSettings: '设置',
+	winMinimize: '最小化（隐藏）',
+	winMaximize: '最大化',
+	winRestore: '还原',
 	createIndex: '创建索引',
 	setIndexDirsLabel: '索引目录',
 	setAddIndexDir: '添加索引目录',
@@ -384,6 +401,7 @@ const en: Strings = {
 	setHotkeyConfirm: 'Confirm',
 	setHotkeyCancel: 'Cancel',
 	setHotkeyNeedModifier: 'Needs at least one modifier (Ctrl / Alt / Shift / Win).',
+	setHotkeyConflict: 'This shortcut is already taken by another app. Try another.',
 	setHotkeySaved: 'Shortcut updated.',
 	setHotkeyFailed: (err) => `Rebind failed: ${err}`,
 	setAutostartLabel: 'Launch at startup',
@@ -399,10 +417,17 @@ const en: Strings = {
 	setLogLevelWarn: 'Warn',
 	setLogLevelError: 'Error',
 	setLogLevelFatal: 'Fatal',
+	setThemeLabel: 'Theme',
+	setThemeAuto: 'System',
+	setThemeLight: 'Light',
+	setThemeDark: 'Dark',
 	openLogDir: 'Open log folder',
 	openIndexDir: 'Open index folder',
 	winClose: 'Hide window',
 	winSettings: 'Settings',
+	winMinimize: 'Minimize (hide)',
+	winMaximize: 'Maximize',
+	winRestore: 'Restore',
 	createIndex: 'Create index',
 	setIndexDirsLabel: 'Indexed folders',
 	setAddIndexDir: 'Add folder',

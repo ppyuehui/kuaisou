@@ -133,6 +133,20 @@ impl TrayBusy {
     }
 }
 
+/// 空闲 tooltip：把当前配置里的呼出快捷键格式化成人类可读形式拼进去
+/// （如 "dowse — Alt+` 呼出"）。设置面板改键后 `set_hotkey` 会调
+/// `refresh_tooltip` 重拼，不用重启。
+fn idle_tooltip(app: &AppHandle) -> String {
+    let s = crate::i18n::strings();
+    let hotkey = app.state::<ConfigState>().get().hotkey;
+    format!(
+        "{}{}{}",
+        s.tooltip_idle_prefix,
+        crate::i18n::format_hotkey(&hotkey),
+        s.tooltip_idle_suffix
+    )
+}
+
 /// 托盘图标 + 右键菜单：呼出 / "索引文件夹"子菜单（每根一项 + 添加文件夹…）
 /// / 开机自启开关 / 透明效果开关 / 透明度三档子菜单 / 退出。进程常驻，浮窗
 /// 只是 show/hide——托盘是用户确认"它还活着"、看一眼索引状态、做少数配置的
@@ -145,7 +159,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 
     let tray_icon = TrayIconBuilder::new()
         .icon(icon)
-        .tooltip(crate::i18n::strings().idle_tooltip)
+        .tooltip(idle_tooltip(app))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(handle_menu_event)
@@ -277,7 +291,7 @@ pub fn refresh_tooltip(app: &AppHandle) {
     let snapshot = app.state::<IndexingStatus>().snapshot();
     let s = crate::i18n::strings();
     let tooltip = match snapshot.phase {
-        IndexingPhase::Idle => s.idle_tooltip.to_string(),
+        IndexingPhase::Idle => idle_tooltip(app),
         IndexingPhase::Text => format!(
             "{}{}{}",
             s.tooltip_indexing_prefix,

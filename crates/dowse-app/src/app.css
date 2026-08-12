@@ -27,6 +27,10 @@
 @import url('./assets/fonts/fonts.css');
 
 :root {
+	/* color-scheme: light dark → 不带 data-theme 时跟随系统（light-dark()
+	   按这里挑明暗对）；data-theme='light'/'dark' 强切成单边，见下面两条规则。 */
+	color-scheme: light dark;
+
 	--font-ui:
 		'Inter', 'MiSans', 'HarmonyOS Sans SC', 'Segoe UI Variable Text', 'Segoe UI Variable',
 		'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
@@ -36,46 +40,54 @@
 	   自然回落到上面 --font-ui 的 MiSans。 */
 	--font-mono: 'Cascadia Mono', Consolas, monospace;
 
-	/* 面板可视不透明度的单一控制点：托盘选了哪一档透明度，Rust 侧就把这
-	   两个数字通过 `dowse://glass-alpha` 事件（或启动时的 get_glass_alpha
-	   查询）写进这里的内联样式，覆盖下面的默认值。默认值对应"中"档，
-	   跟 v0.4.0 发布时的观感基本一致，纯前端开发（没有 Tauri 后端）时也
-	   能看到合理的效果。 */
+	/* ===== 明暗主题（设置面板可切 跟随系统/浅色/深色）=====
+	   不再用 `@media (prefers-color-scheme)` 分支 + 一大片覆盖，改成一个
+	   入口：所有颜色用 CSS `light-dark(亮色, 暗色)` 写成一对，浏览器按根
+	   元素当前的 `color-scheme` 选一边。
+	     - 默认 `color-scheme: light dark` → 跟随系统。
+	     - `:root[data-theme='light']` / `[data-theme='dark']` → 强制一边
+	       （+page.svelte 启动时按配置把 data-theme 写到 <html> 上）。
+	   WebView2 是 Chromium 123+，light-dark()/color-mix() 都原生支持。 */
+
 	--glass-alpha-light: 0.4;
 	--glass-alpha-dark: 0.28;
 
-	/* 浅色（跟随系统） */
-	--fg-primary: #101014;
-	--fg-secondary: #6b6b75;
-	--fg-tertiary: #9494a0;
-	--divider: rgba(0, 0, 0, 0.08);
-	--glass-tint: rgba(255, 255, 255, var(--glass-alpha-light));
-	--solid-bg: #f3f3f6;
-	--row-hover: rgba(0, 0, 0, 0.035);
-	--scrollbar-thumb: rgba(0, 0, 0, 0.16);
+	/* 面板背景（纯色档；窗口不透明后这一条就是面板实际底色） */
+	--glass-tint: light-dark(#f8fbfe, #151a26);
+	--solid-bg: light-dark(#eef6fb, #151a26);
 
-	/* 窗口本体是透明的，原生阴影关掉了（tauri.conf.json 里 shadow: false）。
+	--fg-primary: light-dark(#101014, #f5f5f7);
+	--fg-secondary: light-dark(#56565f, #9d9da6);
+	--fg-tertiary: light-dark(#71717c, #77777f);
+	--divider: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
+
+	/* 窗口本体是不透明的，原生阴影关掉了（tauri.conf.json 里 shadow: false）。
 	   v0.4.1 试过给 .panel 内缩一圈再叠 box-shadow 模拟悬浮感，结果 DWM
 	   的整窗玻璃把这圈内缩渲染成了一圈裸玻璃"画框"（双框 bug，v0.4.2 撤销，
 	   细节见 +page.svelte 里 .panel 规则上的注释）——CSS 阴影方案跟整窗玻璃
 	   物理上不兼容，不再尝试。悬浮感现在只靠这一条描边，.panel 满铺整个
 	   窗口，不留内缩空间。 */
-	--panel-border: rgba(0, 0, 0, 0.07);
+	--panel-border: light-dark(rgba(0, 0, 0, 0.07), rgba(255, 255, 255, 0.07));
 
-	--accent-soft: rgba(58, 154, 194, 0.14);
-	--accent-border: rgba(58, 154, 194, 0.4);
-	--accent-strong: #1e7da6;
-	--accent-caret: #2a8cba;
+	--row-hover: light-dark(rgba(0, 0, 0, 0.035), rgba(255, 255, 255, 0.045));
+	--scrollbar-thumb: light-dark(rgba(0, 0, 0, 0.16), rgba(255, 255, 255, 0.18));
 
-	--shortcut-chip-bg: rgba(0, 0, 0, 0.055);
+	/* 暗色下水蓝提亮一档，保证在深色面板上仍然够清楚 */
+	--accent-soft: light-dark(rgba(58, 154, 194, 0.14), rgba(112, 199, 232, 0.16));
+	--accent-border: light-dark(rgba(58, 154, 194, 0.4), rgba(112, 199, 232, 0.45));
+	--accent-strong: light-dark(#1e7da6, #7fcbe8);
+	--accent-caret: light-dark(#2a8cba, #7fcbe8);
+
+	--shortcut-chip-bg: light-dark(rgba(0, 0, 0, 0.055), rgba(255, 255, 255, 0.07));
 	--shortcut-chip-fg: var(--fg-secondary);
 
-	--toast-bg: rgba(28, 28, 32, 0.92);
-	--toast-fg: #f1f1f4;
+	--toast-bg: light-dark(rgba(28, 28, 32, 0.92), rgba(241, 241, 244, 0.94));
+	--toast-fg: light-dark(#f1f1f4, #1c1c20);
 
 	/* 占位符字色：不是单独一档浅灰，而是前景色本身降到 40～50% 不透明度——
-	   Raycast 的输入框占位符就是这么处理的，颜色跟主题走，不需要单独调。 */
-	--fg-placeholder: color-mix(in srgb, var(--fg-primary) 45%, transparent);
+	   Raycast 的输入框占位符就是这么处理的，颜色跟主题走，不需要单独调。
+	   v1.x 浅色档偏浅反馈后把默认从 45% 提到 55%，浅底上也够清楚。 */
+	--fg-placeholder: color-mix(in srgb, var(--fg-primary) 55%, transparent);
 
 	/* Win11 系统原生窗口圆角半径，跟 DWM 的 DWMWCP_ROUND 裁切对齐——
 	   面板自己的圆角和窗口本体被裁掉的形状必须是同一个数，否则四角
@@ -85,64 +97,37 @@
 	--radius-chip: 5px;
 }
 
-/* 纯色降级档（玻璃申请失败，或系统/用户关掉了透明效果）：这一档必须完全
-   不透明——它是玻璃不可用时的兜底，不加 alpha，不受 --glass-alpha-* 那两个
-   透明度数字影响，直接把 --glass-tint 钉死成不透明色。
-
-   v0.4.x 时这一档不分明暗主题、统一钉成死黑灰（#1c1c20），亮色主题下也会
-   被拽成一块黑灰色面板，观感突兀；中间版本改成明暗主题各给一套（亮色水蓝白 /
-   暗色水蓝黑），但暗色那一档用户反馈"还是太暗"——纯色档要的是清爽通透，
-   不是换一种深色。现在统一收口：不管系统是亮色还是暗色主题，纯色档都固定
-   走这一条浅色水蓝白，不再随 `prefers-color-scheme: dark` 分支（下面的
-   dark 媒体查询里已经不再覆盖这一段，专门留了说明）。顶部到底部叠一层极淡
-   的竖向渐变（近白 → 浅水蓝）增加通透感，前景色/分割线/滚动条则反过来
-   固定用深色系半透明，确保浅底上文字始终清楚可读。 */
-:root[data-effect='solid'] {
-	--glass-tint: linear-gradient(180deg, #f8fbfe 0%, #e6f2fb 100%);
-	--solid-bg: #eef6fb;
-	--fg-primary: #101014;
-	--fg-secondary: #6b6b75;
-	--fg-tertiary: #9494a0;
-	--divider: rgba(0, 0, 0, 0.08);
-	--panel-border: rgba(0, 0, 0, 0.07);
-	--row-hover: rgba(0, 0, 0, 0.035);
-	--scrollbar-thumb: rgba(0, 0, 0, 0.16);
-	--accent-soft: rgba(58, 154, 194, 0.14);
-	--accent-border: rgba(58, 154, 194, 0.4);
-	--accent-strong: #1e7da6;
-	--accent-caret: #2a8cba;
-	--shortcut-chip-bg: rgba(0, 0, 0, 0.055);
+/* 设置面板"深色/浅色/跟随系统"开关：data-theme 强切 color-scheme，
+   light-dark() 随之取值。不带 data-theme 时 color-scheme: light dark
+   跟随系统。 */
+:root[data-theme='light'] {
+	color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-	:root {
-		--fg-primary: #f5f5f7;
-		--fg-secondary: #9d9da6;
-		--fg-tertiary: #77777f;
-		--divider: rgba(255, 255, 255, 0.1);
-		--glass-tint: rgba(18, 18, 22, var(--glass-alpha-dark));
-		--solid-bg: #1c1c20;
-		--panel-border: rgba(255, 255, 255, 0.07);
-		--row-hover: rgba(255, 255, 255, 0.045);
-		--scrollbar-thumb: rgba(255, 255, 255, 0.18);
+:root[data-theme='dark'] {
+	color-scheme: dark;
+}
 
-		/* 暗色下水蓝提亮一档，保证在深色玻璃上仍然够清楚 */
-		--accent-soft: rgba(112, 199, 232, 0.16);
-		--accent-border: rgba(112, 199, 232, 0.45);
-		--accent-strong: #7fcbe8;
-		--accent-caret: #7fcbe8;
-
-		--shortcut-chip-bg: rgba(255, 255, 255, 0.07);
-
-		--toast-bg: rgba(241, 241, 244, 0.94);
-		--toast-fg: #1c1c20;
-	}
-
-	/* 注意：这里故意不再放 `:root[data-effect='solid']` 的暗色主题覆盖。
-	   纯色降级档现在不分明暗系统主题，统一吃上面那一条浅色水蓝白定义
-	   （见文件靠前处的 `:root[data-effect='solid']` 及其注释）——删掉这段
-	   覆盖，选择器特异度相同、这里又没有更晚的同选择器规则，浅色定义在
-	   暗色系统下也不会被二次覆盖。 */
+/* 纯色降级档（玻璃申请失败，或系统/用户关掉了透明效果）：这一档必须完全
+   不透明——它是玻璃不可用时的兜底，不加 alpha，直接把 --glass-tint 钉死成
+   不透明色。窗口已改为不透明后，这一档就是常态（data-effect 由 get_effect_level
+   决定，apply_with_fallback 现在固定返回 Solid）。明暗各给一套，随 data-theme
+   强切 / 系统主题走，不再像 v0.4.x 那样固定死黑灰或固定浅色。 */
+:root[data-effect='solid'] {
+	--glass-tint: light-dark(#f8fbfe, #151a26);
+	--solid-bg: light-dark(#eef6fb, #151a26);
+	--fg-primary: light-dark(#101014, #f5f5f7);
+	--fg-secondary: light-dark(#56565f, #9d9da6);
+	--fg-tertiary: light-dark(#71717c, #77777f);
+	--divider: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
+	--panel-border: light-dark(rgba(0, 0, 0, 0.07), rgba(255, 255, 255, 0.07));
+	--row-hover: light-dark(rgba(0, 0, 0, 0.035), rgba(255, 255, 255, 0.045));
+	--scrollbar-thumb: light-dark(rgba(0, 0, 0, 0.16), rgba(255, 255, 255, 0.18));
+	--accent-soft: light-dark(rgba(58, 154, 194, 0.14), rgba(112, 199, 232, 0.16));
+	--accent-border: light-dark(rgba(58, 154, 194, 0.4), rgba(112, 199, 232, 0.45));
+	--accent-strong: light-dark(#1e7da6, #7fcbe8);
+	--accent-caret: light-dark(#2a8cba, #7fcbe8);
+	--shortcut-chip-bg: light-dark(rgba(0, 0, 0, 0.055), rgba(255, 255, 255, 0.07));
 }
 
 * {
@@ -153,7 +138,9 @@ html,
 body {
 	margin: 0;
 	padding: 0;
-	background: transparent;
+	/* 窗口已不透明：body 铺一层跟面板同色的实心底，避免面板未渲染的
+	   瞬间透出 WebView 默认的白底（暗色模式下尤其扎眼）。 */
+	background: var(--solid-bg);
 	overflow: hidden;
 }
 

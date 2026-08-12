@@ -163,6 +163,8 @@
 	let resultsWidth = $state(0);
 	let splitResizing = $state(false);
 	const SPLIT_RATIO_KEY = 'dowse:results-preview-split';
+	// 窗口是否最大化：最大化按钮的图标/提示据此在 最大化/还原 间切换。
+	let maximized = $state(false);
 
 	let selectedHit = $derived(hits[selectedIndex] ?? null);
 
@@ -482,6 +484,26 @@
 		api.setPinned(pinned).catch((err) => console.error('setPinned failed', err));
 	}
 
+	// 右上角"最大化/还原"按钮。走自定义命令（ACL 权限点没放开 JS 侧 window API）。
+	function toggleMaximize() {
+		api
+			.toggleMaximize()
+			.then(refreshMaximized)
+			.catch((err) => console.error('toggleMaximize failed', err));
+	}
+
+	function refreshMaximized() {
+		api
+			.isMaximized()
+			.then((max) => (maximized = max))
+			.catch(() => {});
+	}
+
+	// 右上角"最小化"按钮：fork 的用法里最小化就是隐藏回托盘（进程常驻）。
+	function minimizeWindow() {
+		api.hideWindow().catch((err) => console.error('hideWindow failed', err));
+	}
+
 	function showContextMenu(i: number) {
 		selectedIndex = i;
 		const hit = hits[i];
@@ -766,6 +788,9 @@
 		divider.setPointerCapture(e.pointerId);
 		splitResizing = true;
 		document.body.classList.add('split-resizing');
+		// 让原生拖窗钩子让路——否则"拖分隔条"会被当成"拖窗口移动"（见
+		// window_drag.rs 的 set_suppress）。
+		api.setDragSuppressed(true);
 		updateSplitFromPointer(e.clientX);
 	}
 
@@ -780,6 +805,7 @@
 		if (divider.hasPointerCapture(e.pointerId)) divider.releasePointerCapture(e.pointerId);
 		splitResizing = false;
 		document.body.classList.remove('split-resizing');
+		api.setDragSuppressed(false);
 		persistSplitRatio();
 	}
 
@@ -821,10 +847,21 @@
 		api.getHotkey().then((raw) => {
 			hotkeyLabel = formatHotkey(raw);
 		});
+		// 改键后 Rust 广播新键，更新快捷键速查浮层（ShortcutOverlay）——
+		// 不改键时浮层只在启动时拉一次，这里负责运行中的同步。
+		const unlistenHotkeyChanged = listen<string>('dowse://hotkey-changed', (evt) => {
+			hotkeyLabel = formatHotkey(evt.payload);
+		});
+		// 最大化状态初值 + 窗口尺寸变化时刷新（拖动边缘缩放/最大化/还原都会
+		// 触发 resize），让最大化按钮的图标始终跟真实状态一致。
+		refreshMaximized();
+		const unlistenResize = getCurrentWindow().onResized(() => refreshMaximized());
 		// 语言启动镜像自愈：config.lang 是权威（Rust 托盘 i18n 也读它），把它
 		// 同步进 localStorage，供下次启动时 i18n.ts 同步读取决定界面语言（见
 		// i18n.ts 顶部说明）。即使有人手改了 config.json，这一步也能在下一次
 		// 启动前把镜像纠正过来——本轮语言本就"重启后生效"，一拍延迟可接受。
+		// 同一份 getConfig 里把深色模式也应用掉：data-theme 强切 color-scheme，
+		// CSS 的 light-dark() 立刻按配置取色（见 app.css），热切换无需重启。
 		api
 			.getConfig()
 			.then((cfg) => {
@@ -832,6 +869,11 @@
 					localStorage.setItem(LANG_OVERRIDE_KEY, cfg.lang);
 				} catch {
 					// localStorage 不可用就算了，i18n.ts 会回落系统语言。
+				}
+				if (cfg.theme === 'light' || cfg.theme === 'dark') {
+					document.documentElement.setAttribute('data-theme', cfg.theme);
+				} else {
+					document.documentElement.removeAttribute('data-theme');
 				}
 			})
 			.catch(() => {});
@@ -896,6 +938,8 @@
 			document.removeEventListener('click', handleDocumentClick);
 			unlistenShown.then((f) => f());
 			unlistenEffect.then((f) => f());
+			unlistenHotkeyChanged.then((f) => f());
+			unlistenResize.then((f) => f());
 			unlistenRebuildDone.then((f) => f());
 			unlistenRebuildError.then((f) => f());
 			unlistenRootRemoved.then((f) => f());
@@ -992,6 +1036,37 @@
 					/>
 				</svg>
 			</button>
+			<!-- fork 新增：最小化按钮——最小化即隐藏回托盘 -->
+			<button
+				type="button"
+				class="icon-btn"
+				title={t.winMinimize}
+				aria-label={t.winMinimize}
+				onclick={minimizeWindow}
+			>
+				<svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+					<path d="M2.5 9h7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+				</svg>
+			</button>
+			<!-- fork 新增：最大化/还原按钮 -->
+			<button
+				type="button"
+				class="icon-btn"
+				title={maximized ? t.winRestore : t.winMaximize}
+				aria-label={maximized ? t.winRestore : t.winMaximize}
+				onclick={toggleMaximize}
+			>
+				{#if maximized}
+					<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+						<rect x="2" y="4" width="6" height="6" stroke="currentColor" stroke-width="1.3" />
+						<path d="M4 4V2.5h5.5V8H10" stroke="currentColor" stroke-width="1.3" />
+					</svg>
+				{:else}
+					<svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+						<rect x="2.5" y="2.5" width="7" height="7" stroke="currentColor" stroke-width="1.3" />
+					</svg>
+				{/if}
+			</button>
 			<!-- fork 新增：关闭按钮——隐藏回托盘（进程常驻，托盘可真正退出） -->
 			<button
 				type="button"
@@ -1043,7 +1118,6 @@
 				<ResultList
 					{hits}
 					{selectedIndex}
-					onhover={(i) => (selectedIndex = i)}
 					onselect={(i) => {
 						// fork：点击只选中，不打开文件——打开走右键菜单或 Enter。
 						selectedIndex = i;

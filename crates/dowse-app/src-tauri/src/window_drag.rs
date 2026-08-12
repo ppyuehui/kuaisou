@@ -47,6 +47,12 @@ static MODE: AtomicIsize = AtomicIsize::new(0); // 0=drag
 static MIN_W: AtomicI32 = AtomicI32::new(640);
 static MIN_H: AtomicI32 = AtomicI32::new(420);
 
+/// 拖窗抑制开关：前端拖动结果列表分隔条（`divider-v`）等**自己需要拖拽语义**
+/// 的控件时置真，钩子收到按下就跳过武装，绝不会把分隔条拖动误判成移窗
+/// （分隔条本身也是"按住左键移动"）。前端 pointerdown 置真、pointerup/
+/// pointercancel 置假（见 +page.svelte 的 setDragSuppressed）。
+static SUPPRESS_DRAG: AtomicBool = AtomicBool::new(false);
+
 const MODE_DRAG: isize = 0;
 const MODE_RESIZE: isize = 1;
 
@@ -125,29 +131,34 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         if !target.is_invalid() {
             match msg {
                 WM_LBUTTONDOWN => {
-                    let hit = WindowFromPoint(info.pt);
-                    if hit == target || IsChild(target, hit).as_bool() {
-                        ARMED.store(true, Ordering::SeqCst);
-                        START_X.store(info.pt.x, Ordering::SeqCst);
-                        START_Y.store(info.pt.y, Ordering::SeqCst);
-                        let mut r = RECT::default();
-                        if GetWindowRect(target, &mut r).is_ok() {
-                            WIN_X.store(r.left, Ordering::SeqCst);
-                            WIN_Y.store(r.top, Ordering::SeqCst);
-                            WIN_W.store(r.right - r.left, Ordering::SeqCst);
-                            WIN_H.store(r.bottom - r.top, Ordering::SeqCst);
-                        }
-                        let bits = hit_edge(info.pt.x, info.pt.y, &r);
-                        if bits != 0 {
-                            MODE.store(MODE_RESIZE, Ordering::SeqCst);
-                            RESIZE_BITS.store(bits as isize, Ordering::SeqCst);
-                        } else {
-                            MODE.store(MODE_DRAG, Ordering::SeqCst);
+                    if SUPPRESS_DRAG.load(Ordering::SeqCst) {
+                        // 前端正在拖分隔条等控件——窗口拖动让路。
+                        ARMED.store(false, Ordering::SeqCst);
+                    } else {
+                        let hit = WindowFromPoint(info.pt);
+                        if hit == target || IsChild(target, hit).as_bool() {
+                            ARMED.store(true, Ordering::SeqCst);
+                            START_X.store(info.pt.x, Ordering::SeqCst);
+                            START_Y.store(info.pt.y, Ordering::SeqCst);
+                            let mut r = RECT::default();
+                            if GetWindowRect(target, &mut r).is_ok() {
+                                WIN_X.store(r.left, Ordering::SeqCst);
+                                WIN_Y.store(r.top, Ordering::SeqCst);
+                                WIN_W.store(r.right - r.left, Ordering::SeqCst);
+                                WIN_H.store(r.bottom - r.top, Ordering::SeqCst);
+                            }
+                            let bits = hit_edge(info.pt.x, info.pt.y, &r);
+                            if bits != 0 {
+                                MODE.store(MODE_RESIZE, Ordering::SeqCst);
+                                RESIZE_BITS.store(bits as isize, Ordering::SeqCst);
+                            } else {
+                                MODE.store(MODE_DRAG, Ordering::SeqCst);
+                            }
                         }
                     }
                 }
                 WM_MOUSEMOVE => {
-                    if ARMED.load(Ordering::SeqCst) {
+                    if ARMED.load(Ordering::SeqCst) && !SUPPRESS_DRAG.load(Ordering::SeqCst) {
                         let sx = START_X.load(Ordering::SeqCst);
                         let sy = START_Y.load(Ordering::SeqCst);
                         let dx = info.pt.x - sx;
@@ -258,4 +269,16 @@ fn _cursor_pos() -> POINT {
         let _ = GetCursorPos(&mut p);
     }
     p
+}
+
+/// 前端拖动分隔条等自带拖拽语义的控件时调用：置真后钩子不武装、并立刻取消
+/// 一次在途的拖窗（哪怕按下的瞬间还没收到前端的抑制事件，这里也把 ARMED 清
+/// 掉，后续的 WM_MOUSEMOVE 就不会再 SetWindowPos 移动窗口了）。pointerup/
+/// pointercancel 时置假恢复拖窗。
+pub fn set_suppress(suppressed: bool) {
+    SUPPRESS_DRAG.store(suppressed, Ordering::SeqCst);
+    if suppressed {
+        ARMED.store(false, Ordering::SeqCst);
+        MODE.store(MODE_DRAG, Ordering::SeqCst);
+    }
 }

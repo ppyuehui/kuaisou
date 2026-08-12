@@ -415,10 +415,11 @@ pub struct SettingsDto {
     pub lang: String,
     pub auto_hide_on_blur: bool,
     pub log_level: String,
+    pub theme: String,
 }
 
 /// 设置面板打开时拉一次通用区的全部初值（改键/自启/语言/失焦自动
-/// 隐藏/日志级别）。
+/// 隐藏/日志级别/深色模式）。
 #[tauri::command]
 pub fn get_config(app: tauri::AppHandle) -> SettingsDto {
     let cfg = app.state::<ConfigState>().get();
@@ -429,6 +430,7 @@ pub fn get_config(app: tauri::AppHandle) -> SettingsDto {
         lang: cfg.lang,
         auto_hide_on_blur: cfg.auto_hide_on_blur,
         log_level: cfg.log_level,
+        theme: cfg.theme,
     }
 }
 
@@ -464,9 +466,17 @@ pub fn set_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), String> {
     match gs.register(new_sc) {
         Ok(()) => {
             *state.0.lock().expect("hotkey mutex poisoned") = new_sc;
-            app.state::<ConfigState>().set_hotkey(hotkey).map_err(|e| {
-                format!("快捷键已即时生效，但写入配置失败（重启后会回到旧键）：{e}")
-            })?;
+            app.state::<ConfigState>()
+                .set_hotkey(hotkey.clone())
+                .map_err(|e| {
+                    format!("快捷键已即时生效，但写入配置失败（重启后会回到旧键）：{e}")
+                })?;
+            // 托盘 tooltip 里印着当前呼出键（"dowse — Alt+` 呼出"），改键后
+            // 立即重拼，别让它停在旧键上（用户反馈的"一直显示 alt+·"）。
+            crate::tray::refresh_tooltip(&app);
+            // 顺带把新键广播给浮窗前端，让快捷键速查浮层（ShortcutOverlay）也
+            // 跟着更新，别在改完键后还印旧键。
+            let _ = app.emit("dowse://hotkey-changed", hotkey);
             Ok(())
         }
         Err(err) => {
@@ -514,6 +524,18 @@ pub fn set_log_level(config: State<ConfigState>, level: String) -> Result<(), St
     config.set_log_level(level).map_err(|e| e.to_string())
 }
 
+/// 设置面板"深色模式"：只落盘，热切换由前端完成——前端 `set_theme` 把
+/// 新值写回 config 后，自己按返回值把 `data-theme` 写到 <html> 上，
+/// CSS 的 `light-dark()` 立即重算（见 app.css），不用重启。只认
+/// auto/light/dark 三种取值。
+#[tauri::command]
+pub fn set_theme(config: State<ConfigState>, theme: String) -> Result<(), String> {
+    if !matches!(theme.as_str(), "auto" | "light" | "dark") {
+        return Err(format!("不支持的主题取值：{theme}"));
+    }
+    config.set_theme(theme).map_err(|e| e.to_string())
+}
+
 /// 在资源管理器里打开日志文件夹（`%LOCALAPPDATA%\dowse\logs`），返回打开的
 /// 路径。目录不存在就先建出来再打开——日志初始化时一定会建，这里只是兜底，
 /// 避免极端情况下 explorer 对着一个不存在的路径弹无关窗口。
@@ -550,6 +572,59 @@ pub fn open_index_dir(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn hide_window(window: tauri::WebviewWindow) {
     window_fx::hide_window(&window);
+}
+
+/// 前端拖动分隔条等自带拖拽语义的控件时调用（pointerdown 置真 / pointerup
+/// 置假）：让原生拖窗钩子让路，见 window_drag.rs 的 `set_suppress`。避免
+/// "拖分隔条调左右宽度"被误判成"拖窗口移动"。
+#[tauri::command]
+pub fn set_drag_suppressed(suppressed: bool) {
+    crate::window_drag::set_suppress(suppressed);
+}
+
+/// 最大化/还原 切换。走自定义命令而不是 JS 侧 `getCurrentWindow().toggleMaximize()`
+/// ——那需要 `core:window:allow-toggle-maximize` ACL 权限点，跟 hide_window 同
+/// 样道理（默认 capability 没放开），自定义命令不受约束。
+#[tauri::command]
+pub fn toggle_maximize(window: tauri::WebviewWindow) {
+    let maximized = window.is_maximized().unwrap_or(false);
+    let _ = if maximized {
+        window.unmaximize()
+    } else {
+        window.maximize()
+    };
+}
+
+/// 查询当前是否最大化，前端据此切换最大化/还原图标。
+#[tauri::command]
+pub fn is_maximized(window: tauri::WebviewWindow) -> bool {
+    window.is_maximized().unwrap_or(false)
+}
+
+/// 设置面板"改键"的冲突预检：在用户确认前探测某个组合键是否已被其它程序
+/// 占用。不做任何持久化、也不动当前快捷键——用"临时注册一下、成功就立刻
+/// 退掉"来探测占用（Windows 的 RegisterHotKey 同一组合键只能有一个持有者，
+/// 能注册成功就说明没有别人占用）。
+///
+/// - 已经是当前正在用的快捷键（我们自己注册着）→ 视为可用，不改不换。
+/// - 能临时注册成功 → 可用。
+/// - 注册失败 → 被占用。
+#[tauri::command]
+pub fn check_hotkey_available(app: tauri::AppHandle, hotkey: String) -> Result<bool, String> {
+    let sc: Shortcut = hotkey
+        .parse()
+        .map_err(|e| format!("快捷键格式无法识别：{e}"))?;
+    let gs = app.global_shortcut();
+    if gs.is_registered(sc) {
+        return Ok(true);
+    }
+    Ok(match gs.register(sc) {
+        Ok(()) => {
+            let _ = gs.unregister(sc);
+            true
+        }
+        Err(_) => false,
+    })
 }
 
 /// 呼出延迟性能埋点的落地端：前端在窗口 `dowse://shown` 之后确认首帧真正

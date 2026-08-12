@@ -10,7 +10,8 @@ import type {
 	LangOption,
 	PreviewResult,
 	SearchHit,
-	SortOption
+	SortOption,
+	ThemeOption
 } from './types';
 
 export function indexStatus(): Promise<IndexStatus> {
@@ -115,6 +116,29 @@ export function hideWindow(): Promise<void> {
 	return invoke('hide_window');
 }
 
+/// 前端拖动分隔条等自带拖拽语义的控件时调用（pointerdown 置真 / pointerup
+/// 置假）：让原生拖窗钩子让路，否则"拖分隔条调左右宽度"会被误判成"拖窗口"。
+export function setDragSuppressed(suppressed: boolean): Promise<void> {
+	return invoke('set_drag_suppressed', { suppressed });
+}
+
+/// 最大化/还原切换。同样走自定义命令（`window|toggle-maximize` ACL 权限点
+/// 默认没放开），前端只管调用。
+export function toggleMaximize(): Promise<void> {
+	return invoke('toggle_maximize');
+}
+
+/// 当前窗口是否最大化，前端据此切换 最大化/还原 图标。
+export function isMaximized(): Promise<boolean> {
+	return invoke('is_maximized');
+}
+
+/// 设置面板"改键"的冲突预检：探测某个组合键是否已被其它程序占用。
+/// resolve true = 可用，false = 已被占用。不做持久化、不动当前快捷键。
+export function checkHotkey(hotkey: string): Promise<boolean> {
+	return invoke('check_hotkey_available', { hotkey });
+}
+
 /// 索引规则面板 Ctrl+, 打开时拉一次当前规则填表单初值。
 export function getRules(): Promise<IndexRules> {
 	return invoke('get_rules');
@@ -169,6 +193,13 @@ export function setAutoHideOnBlur(enabled: boolean): Promise<void> {
 /// 并持久化到 config（重启后仍生效）。
 export function setLogLevel(level: string): Promise<void> {
 	return invoke('set_log_level', { level });
+}
+
+/// 设置面板"深色模式"（auto/light/dark）：落盘到 config。热切换由前端完成
+/// ——调用方按新值把 `data-theme` 写到 <html> 上，CSS 的 light-dark() 立即
+/// 重算（见 app.css），不用重启。
+export function setTheme(theme: ThemeOption): Promise<void> {
+	return invoke('set_theme', { theme });
 }
 
 /// 在资源管理器里打开日志文件夹（%LOCALAPPDATA%\dowse\logs），resolve 出

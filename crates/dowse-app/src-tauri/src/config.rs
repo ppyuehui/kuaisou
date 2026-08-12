@@ -39,6 +39,16 @@ pub struct AppConfig {
     /// 响应式，本轮不做），所以这里只负责持久化选择。
     #[serde(default = "default_lang")]
     pub lang: String,
+    /// 明暗主题："auto"（默认）跟随系统 UI 主题；"light"/"dark" 钉死浅色/
+    /// 深色。设置面板"深色模式"写这个字段。前端 +page.svelte 启动时读它，
+    /// 把 `data-theme` 写到 <html> 上强切 CSS 的 color-scheme（见 app.css
+    /// 里 light-dark() 那套），**运行时热切换，不用重启**。
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    "auto".to_string()
 }
 
 fn default_lang() -> String {
@@ -66,6 +76,7 @@ impl Default for AppConfig {
             autostart_user_disabled: false,
             hotkey: default_hotkey(),
             lang: default_lang(),
+            theme: default_theme(),
             auto_hide_on_blur: default_auto_hide_on_blur(),
             log_level: default_log_level(),
         }
@@ -157,6 +168,14 @@ impl ConfigState {
     pub fn set_lang(&self, lang: String) -> Result<()> {
         let mut guard = self.0.lock().expect("config mutex poisoned");
         guard.lang = lang;
+        save(&guard)
+    }
+
+    /// 设置面板"深色模式"落盘。取值合法性（auto/light/dark）由
+    /// `commands::set_theme` 把关，这层只管持久化。
+    pub fn set_theme(&self, theme: String) -> Result<()> {
+        let mut guard = self.0.lock().expect("config mutex poisoned");
+        guard.theme = theme;
         save(&guard)
     }
 }

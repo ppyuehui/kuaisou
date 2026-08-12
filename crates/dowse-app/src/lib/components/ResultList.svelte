@@ -8,13 +8,11 @@
 	let {
 		hits,
 		selectedIndex,
-		onhover,
 		onselect,
 		oncontextmenu
 	}: {
 		hits: SearchHit[];
 		selectedIndex: number;
-		onhover: (i: number) => void;
 		onselect: (i: number) => void;
 		oncontextmenu: (i: number) => void;
 	} = $props();
@@ -56,7 +54,6 @@
 			<ResultRow
 				{hit}
 				selected={i === selectedIndex}
-				onhover={() => onhover(i)}
 				onselect={() => onselect(i)}
 				oncontextmenu={() => oncontextmenu(i)}
 			/>

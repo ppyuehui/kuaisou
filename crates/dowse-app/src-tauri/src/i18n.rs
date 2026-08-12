@@ -53,7 +53,8 @@ fn resolve_lang() -> Lang {
 /// 所有 Rust 侧界面可见文案的一张表。字段全是 `&'static str`，带插值的地方
 /// （tooltip、每根文档数）拆成前后缀，由调用方 `format!` 拼。
 pub struct Strings {
-    pub idle_tooltip: &'static str,
+    pub tooltip_idle_prefix: &'static str,
+    pub tooltip_idle_suffix: &'static str,
     pub menu_show: &'static str,
     pub menu_autostart: &'static str,
     pub menu_quit: &'static str,
@@ -77,7 +78,8 @@ pub struct Strings {
 }
 
 const ZH: Strings = Strings {
-    idle_tooltip: "dowse — Alt+` 呼出",
+    tooltip_idle_prefix: "dowse — ",
+    tooltip_idle_suffix: " 呼出",
     menu_show: "呼出",
     menu_autostart: "开机自启",
     menu_quit: "退出",
@@ -98,7 +100,8 @@ const ZH: Strings = Strings {
 };
 
 const EN: Strings = Strings {
-    idle_tooltip: "dowse — Alt+` to open",
+    tooltip_idle_prefix: "dowse — ",
+    tooltip_idle_suffix: " to open",
     menu_show: "Show dowse",
     menu_autostart: "Launch at startup",
     menu_quit: "Quit",
@@ -123,5 +126,63 @@ pub fn strings() -> &'static Strings {
     match lang() {
         Lang::Zh => &ZH,
         Lang::En => &EN,
+    }
+}
+
+/// 把 `tauri-plugin-global-shortcut` 认的原始快捷键字符串（如 "Alt+Backquote"）
+/// 转成人类习惯的显示形式（"Alt+`"），跟前端 `lib/hotkey.ts` 的 `formatHotkey`
+/// 保持同一套映射。托盘 tooltip 里展示"当前呼出键"用（见 tray.rs 的
+/// `idle_tooltip`），改键后立即重拼，不用重启。
+pub fn format_hotkey(raw: &str) -> String {
+    if raw.is_empty() {
+        return raw.to_string();
+    }
+    raw.split('+')
+        .map(|part| label_of(part.trim()))
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+fn label_of(segment: &str) -> &str {
+    match segment {
+        "Backquote" => "`",
+        "Minus" => "-",
+        "Equal" => "=",
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Backslash" => "\\",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        "Space" => "Space",
+        "Super" | "Meta" => "Win",
+        "Enter" => "↵",
+        "Tab" => "Tab",
+        "Escape" => "Esc",
+        "Backspace" => "Backspace",
+        "Delete" => "Del",
+        "ArrowUp" => "↑",
+        "ArrowDown" => "↓",
+        "ArrowLeft" => "←",
+        "ArrowRight" => "→",
+        _ => {
+            // keyboard_types::Code 的序列化命名规律：KeyA -> A，Digit1 -> 1。
+            if let Some(rest) = segment.strip_prefix("Key")
+                && rest.len() == 1
+                && rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            {
+                return rest;
+            }
+            if let Some(rest) = segment.strip_prefix("Digit")
+                && rest.len() == 1
+                && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+            {
+                return rest;
+            }
+            segment
+        }
     }
 }

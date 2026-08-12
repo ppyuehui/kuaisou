@@ -22,7 +22,7 @@
 
 	import { onMount, tick } from 'svelte';
 	import * as api from '../api';
-	import type { IndexRules, LangOption } from '../types';
+	import type { IndexRules, LangOption, ThemeOption } from '../types';
 	import { t, LANG_OVERRIDE_KEY } from '../i18n';
 	import { formatHotkey } from '../hotkey';
 
@@ -64,12 +64,17 @@
 	let autoHideOnBlur = $state(false);
 	// fork 新增：日志最低级别。
 	let logLevel = $state('info');
+	// fork 新增：明暗主题（跟随系统/浅色/深色，热切换）。
+	let theme = $state<ThemeOption>('auto');
 
 	// ── 改键捕获态 ──────────────────────────────────────────────────────────
 	let capturing = $state(false); // 正在等用户按下新组合键
 	let pendingCombo = $state<string | null>(null); // 捕到、待确认的组合键（Tauri 格式）
 	let pendingLabel = $state(''); // 上面那个的展示形式
 	let hotkeyMsg = $state(''); // 提示/错误文案（need-modifier / saved / failed）
+	// 待确认组合键是否已被其它程序占用：null=还没查到，true=占用，false=可用。
+	// 捕获到新键的瞬间就发 `check_hotkey_available` 预检，冲突在确认前就亮出来。
+	let hotkeyConflict = $state<boolean | null>(null);
 	let hotkeyBtnEl: HTMLButtonElement | undefined = $state();
 	let confirmBtnEl: HTMLButtonElement | undefined = $state();
 
@@ -103,6 +108,12 @@
 		{ value: 'warn', label: t.setLogLevelWarn },
 		{ value: 'error', label: t.setLogLevelError },
 		{ value: 'fatal', label: t.setLogLevelFatal }
+	];
+	// fork 新增：深色模式三档。
+	const THEME_OPTIONS: { value: ThemeOption; label: string }[] = [
+		{ value: 'auto', label: t.setThemeAuto },
+		{ value: 'light', label: t.setThemeLight },
+		{ value: 'dark', label: t.setThemeDark }
 	];
 
 	// ── 索引规则区状态（原样迁入） ──────────────────────────────────────────
@@ -181,6 +192,7 @@
 		hotkeyMsg = '';
 		pendingCombo = null;
 		pendingLabel = '';
+		hotkeyConflict = null;
 		capturing = true;
 		// 聚焦捕获按钮，键盘事件落在它上面。切到捕获态后按钮元素会被替换成
 		// 另一个（文案不同），所以等 DOM 更新后再抢焦点。
@@ -218,6 +230,19 @@
 		pendingLabel = formatHotkey(pendingCombo);
 		hotkeyMsg = '';
 		capturing = false;
+		// 冲突预检：异步问 Rust 这个组合键能不能注册（见 commands.rs 的
+		// check_hotkey_available），结果回来前先不亮"确认"之外的提示。
+		hotkeyConflict = null;
+		api
+			.checkHotkey(pendingCombo)
+			.then((free) => {
+				hotkeyConflict = !free;
+			})
+			.catch(() => {
+				// 预检失败（比如恰好系统异常）就当"没占用"处理——确认时 Rust 的
+				// set_hotkey 还有一道真注册兜底，预检只是提前提醒。
+				hotkeyConflict = false;
+			});
 		tick().then(() => confirmBtnEl?.focus());
 	}
 
@@ -229,6 +254,12 @@
 
 	async function confirmHotkey() {
 		if (!pendingCombo) return;
+		// 预检已确认冲突：不让提交——Rust 的真注册也只会失败（RegisterHotKey
+		// 同一组合键只能一个持有者），提前拦住比报错再回滚更省事。
+		if (hotkeyConflict === true) {
+			hotkeyMsg = t.setHotkeyConflict;
+			return;
+		}
 		const combo = pendingCombo;
 		try {
 			await api.setHotkey(combo);
@@ -241,6 +272,7 @@
 		} finally {
 			pendingCombo = null;
 			pendingLabel = '';
+			hotkeyConflict = null;
 			// 确认/取消的按钮消失后焦点会掉到 body，把它收回卡片，保证面板继续
 			// 吞掉全局快捷键、Esc 仍能关面板。
 			tick().then(() => cardEl?.focus());
@@ -251,6 +283,7 @@
 		pendingCombo = null;
 		pendingLabel = '';
 		hotkeyMsg = '';
+		hotkeyConflict = null;
 		capturing = false;
 		tick().then(() => cardEl?.focus());
 	}
@@ -303,6 +336,23 @@
 		});
 	}
 
+	// ── 深色模式：热切换，即点即生效 ───────────────────────────────────────
+	// 把 data-theme 写到 <html> 上强切 CSS 的 color-scheme，light-dark() 的
+	// 明暗对立刻按新值取色（见 app.css）。"跟随系统"则移除属性，回落到
+	// color-scheme: light dark。写 config 失败不撤销视觉——下次启动兜底同步。
+	function pickTheme(next: ThemeOption) {
+		if (next === theme) return;
+		theme = next;
+		applyTheme(next);
+		api.setTheme(next).catch((e) => console.error('setTheme failed', e));
+	}
+
+	function applyTheme(next: ThemeOption) {
+		const el = document.documentElement;
+		if (next === 'auto') el.removeAttribute('data-theme');
+		else el.setAttribute('data-theme', next);
+	}
+
 	// ── 打开数据文件夹：失败 toast 由按钮旁的状态行呈现 ────────────────────
 	let folderError = $state('');
 	async function openFolder(kind: 'log' | 'index') {
@@ -350,6 +400,8 @@
 				lang = cfg.lang;
 				autoHideOnBlur = cfg.auto_hide_on_blur;
 				logLevel = cfg.log_level || 'info';
+				theme = cfg.theme || 'auto';
+				applyTheme(theme);
 			})
 			.catch(() => {
 				// 静默：通用区退回默认展示值即可。
@@ -461,6 +513,7 @@
 							bind:this={confirmBtnEl}
 							type="button"
 							class="mini-btn primary"
+							disabled={hotkeyConflict === true}
 							onclick={confirmHotkey}
 						>
 							{t.setHotkeyConfirm}
@@ -469,6 +522,9 @@
 							{t.setHotkeyCancel}
 						</button>
 					</div>
+					{#if hotkeyConflict === true}
+						<p class="status error">{t.setHotkeyConflict}</p>
+					{/if}
 				{:else}
 					<div class="hotkey-row">
 						<kbd class="hotkey-chip">{hotkeyLabel || '—'}</kbd>
@@ -525,6 +581,14 @@
 				<div class="field-inline">
 					<span class="field-label">{t.setLogLevelLabel}</span>
 					{@render segmented(LOG_LEVEL_OPTIONS, logLevel, pickLogLevel, false)}
+				</div>
+			</div>
+
+			<!-- fork 新增：深色模式（跟随系统/浅色/深色，即点即生效） -->
+			<div class="field">
+				<div class="field-inline">
+					<span class="field-label">{t.setThemeLabel}</span>
+					{@render segmented(THEME_OPTIONS, theme, (v) => pickTheme(v as ThemeOption), false)}
 				</div>
 			</div>
 
@@ -850,6 +914,11 @@
 		color: var(--fg-primary);
 	}
 
+	.mini-btn:disabled {
+		opacity: 0.45;
+		pointer-events: none;
+	}
+
 	.mini-btn.primary {
 		border-color: var(--accent-border);
 		background: var(--accent-soft);
@@ -983,7 +1052,7 @@
 	}
 
 	.status.error {
-		color: var(--fg-secondary);
+		color: var(--accent-strong);
 	}
 
 	@keyframes scrim-in {

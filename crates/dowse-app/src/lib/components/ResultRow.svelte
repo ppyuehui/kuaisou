@@ -7,13 +7,11 @@
 	let {
 		hit,
 		selected,
-		onhover,
 		onselect,
 		oncontextmenu
 	}: {
 		hit: SearchHit;
 		selected: boolean;
-		onhover: () => void;
 		onselect: () => void;
 		oncontextmenu: () => void;
 	} = $props();
@@ -22,7 +20,7 @@
 	// 菜单本身是 Win32 原生绘制的（见 Rust 侧 context_menu.rs），这里只负责触发。
 	function handleContextMenu(e: MouseEvent) {
 		e.preventDefault();
-		onhover();
+		onselect();
 		oncontextmenu();
 	}
 
@@ -44,7 +42,6 @@
 	type="button"
 	class="row"
 	class:selected
-	onmouseenter={onhover}
 	onclick={onselect}
 	ondblclick={onselect}
 	oncontextmenu={handleContextMenu}
@@ -82,7 +79,7 @@
 	}
 
 	.row:hover {
-		background: var(--row-hover);
+		background: transparent;
 	}
 
 	/* 选中态只用纯色块，不加描边——border 仍占位为 transparent 是为了不

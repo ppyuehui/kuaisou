@@ -89,6 +89,10 @@ export type EffectLevel = 'acrylic' | 'mica' | 'solid';
 /// 'auto' 跟随系统，'zh'/'en' 钉死为中/英。见 i18n.ts 顶部的启动镜像说明。
 export type LangOption = 'auto' | 'zh' | 'en';
 
+/// 明暗主题，跟 Rust 侧 `config.rs::AppConfig::theme` 一一对应：
+/// 'auto' 跟随系统，'light'/'dark' 钉死为浅色/深色（热切换，不用重启）。
+export type ThemeOption = 'auto' | 'light' | 'dark';
+
 /// 设置面板通用区一次拉齐的初值，跟 Rust 侧 `commands.rs::SettingsDto`
 /// 一一对应。`autostart_enabled` 是自启插件报告的真实系统态（不是 config 里
 /// 语义不同的 `autostart_user_disabled`），字段名保持 snake_case 跟其它 DTO 一致。
@@ -100,4 +104,6 @@ export interface AppSettings {
 	auto_hide_on_blur: boolean;
 	/** 日志最低级别（debug/info/warn/error/fatal），低于它的日志不写盘。 */
 	log_level: string;
+	/** 明暗主题（auto/light/dark）。 */
+	theme: ThemeOption;
 }
