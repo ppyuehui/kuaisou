@@ -1,10 +1,10 @@
 [English](README.md) | 简体中文
 
 <p align="center">
-  <img src="crates/dowse-app/src-tauri/icons/128x128@2x.png" width="96" height="96" alt="dowse logo">
+  <img src="crates/dowse-app/src-tauri/icons/128x128@2x.png" width="96" height="96" alt="快搜 logo">
 </p>
 
-<h1 align="center">问渠 dowse</h1>
+<h1 align="center">快搜 KuaiSou</h1>
 
 <p align="center">
   开源的 Windows 本地文件内容全文搜索工具。搜索文件名、PDF 与 Office 正文、代码和截图文字，快捷键呼出。
@@ -27,9 +27,11 @@
   <a href="https://glama.ai/mcp/servers/ltspace/dowse"><img src="https://glama.ai/mcp/servers/ltspace/dowse/badges/score.svg" alt="Glama MCP server 评分"></a>
 </p>
 
-英文名取自 dowsing rod（探水杖）；中文名「问渠」，取朱熹《观书有感》"问渠那得清如许，为有源头活水来"——探水杖找水，问渠亦问水：你的文件是源头，dowse 让你随时问得到。
+名字「快搜」（KuaiSou）——「快」是快，快捷键呼出、键入即得；「搜」就是搜索。这个名字直白地说明它做的事：在 Windows 上飞快地搜到你要的文件内容。
 
-![dowse 浮窗搜索“北极星”，左侧展示排好序的项目资料，右侧直接预览一页简报](docs/screenshots/hero.zh-CN.png)
+> **Fork 说明** — 本仓库 fork 自原版 [`ltspace/dowse`](https://github.com/ltspace/dowse)（原仓库地址：<https://github.com/ltspace/dowse>），在此之上独立维护、含本地定制化修改，不向上游发起合并请求。
+
+![快搜 浮窗搜索“北极星”，左侧展示排好序的项目资料，右侧直接预览一页简报](docs/screenshots/hero.zh-CN.png)
 
 ## 动机
 
@@ -40,7 +42,7 @@ Windows 上没有同时满足以下三点的工具：
 - 一个快捷键呼出、键盘完成全部操作、不引入可感知的延迟
 
 最接近的开源实现是 sist2，但它面向 Linux，Windows 下只能通过 Docker 运行，
-中文按 trigram 处理，项目已停止维护。dowse 是针对这三点的 Windows 原生实现。
+中文按 trigram 处理，项目已停止维护。快搜 是针对这三点的 Windows 原生实现。
 
 ## 功能
 
@@ -54,9 +56,9 @@ Windows 上没有同时满足以下三点的工具：
 | 🤖 **MCP server** | 通过 stdio 把本地搜索能力暴露给 AI agent |
 | 🚀 **NTFS 快速层** | MFT 直读 + USN Journal，仅管理员权限下启用，否则静默退回常规路径 |
 
-## dowse 与同类工具
+## 快搜 与同类工具
 
-| | dowse | Everything | Windows 自带搜索 | sist2 |
+| | 快搜 | Everything | Windows 自带搜索 | sist2 |
 |---|:---:|:---:|:---:|:---:|
 | 文件名搜索 | ✓ | ✓ | ✓ | ✓ |
 | 文档内容搜索 | ✓（持久索引） | 按需扫描 | 取决于索引范围与过滤器 | ✓ |
@@ -105,7 +107,7 @@ v0.6.1 快了约一倍，纯文本索引体积也小了约三分之一，两者�
 
 ## 使用
 
-**下载安装包** — 从[最新版本](https://github.com/ltspace/dowse/releases/latest)下载
+**下载安装包** — 从本 fork 的[最新版本](https://gitee.com/ppyuehui/dowse/releases)下载
 `dowse-app_*_x64-setup.exe`，运行安装，然后 `Alt+\`` 呼出。
 
 安装包未做代码签名，首次运行时 Windows SmartScreen 会拦截。点击**更多信息**再点**仍要运行**
@@ -122,7 +124,7 @@ cargo install --path crates/dowse   # 从本地检出安装
 **源码构建：**
 
 ```powershell
-git clone https://github.com/ltspace/dowse && cd dowse
+git clone https://gitee.com/ppyuehui/dowse && cd dowse
 
 # CLI
 cargo run -p dowse -- index D:\docs      # 建索引
@@ -196,6 +198,8 @@ crate 只以库形式依赖 `dowse`（`default-features = false`，因此既不�
 
 ## 路线图
 
+上游里程碑（继承自原版 dowse）：
+
 | # | 内容 | 状态 |
 |---|------|------|
 | 1 | CLI 索引与搜索：中文分词、GBK 探测、高亮 | ✅ 完成 |
@@ -203,8 +207,20 @@ crate 只以库形式依赖 `dowse`（`default-features = false`，因此既不�
 | 3 | 增量索引：文件监听、启动对账 | ✅ 完成 |
 | 4 | OCR 管线：截图文字入索引 | ✅ 完成 |
 | 5 | MCP server | ✅ 完成 |
-| 6 | NTFS MFT / USN Journal 快速路径 | ✅ 完成（管理员权限下的快车道未经真机验证，见设计文档"实施备注"） |
-| 7 | 语义搜索（向量召回、混合排序） | 🔍 探索中 |
+| 6 | NTFS MFT / USN Journal 快速路径 | ✅ 完成 |
+
+本 fork 的定制与增强：
+
+| # | 内容 | 状态 |
+|---|------|------|
+| 7 | 多根索引：设置面板添加/移除多个索引目录 | ✅ 完成 |
+| 8 | 明暗主题切换（跟随系统/浅色/深色，热切换） | ✅ 完成 |
+| 9 | 移除透明/玻璃效果，窗口固定不透明纯色 | ✅ 完成 |
+| 10 | 窗口控制：最小化=隐藏、最大化/还原、显示恢复原位置、原生拖动/缩放 | ✅ 完成 |
+| 11 | 全量重建多线程并行收录（实测约 2.4× 提速） | ✅ 完成 |
+| 12 | 结果列表点击才选中（不跟随 hover） | ✅ 完成 |
+| 13 | 代码审查加固：zip 炸弹防护、OCR 队列崩溃恢复、重建独占锁 RAII、原子写等 | ✅ 完成 |
+| 14 | 语义搜索（向量召回、混合排序） | 🔍 探索中 |
 
 ## 技术栈
 
@@ -228,17 +244,3 @@ Tauri 2 · Svelte 5 · Windows.Media.Ocr · notify · Win32（MFT/USN Journal）
 ## 许可
 
 双许可协议 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE)，任选其一。
-
-## 一点想法
-
-童年时我只有一部酷派手机。没有网络的大把时间里，我会点开文件管理器，一个个研究里面的文件和它们的构成，却总被那些散落各处、又不知内容为何的文件弄得一头雾水。
-
-大学时买了台威联通 NAS，才发现世界上有 Qsirch 这么好用的东西，可它只活在 NAS 里，没有 Windows 版。
-
-screenpipe 珠玉在前，像是黑镜第一季第三集《The Entire History of You》里记忆颗粒的初级版本。它很未来，很后现代，几乎是人在本地搜索这件事上的终极形态，但对当下的世界来说太重了。
-
-所以我做了 dowse。
-
-科幻电影《她》像一则预言，不远的将来，AI 会接管我们的个人电脑。dowse 受此启发，也提供 MCP 接口供 AI 调用，只不过检索的是你自己的文件，在你自己的机器上。
-
-如果你也有点强迫症、喜欢整理、对自己的文件系统有很强的掌控欲，那这个软件很适合你。性能和美感，是我同样在意的东西。

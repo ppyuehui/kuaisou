@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "dowse-app",
+  "productName": "快搜",
   "version": "1.0.0",
   "identifier": "com.dowse.app",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "dowse",
+        "title": "快搜",
         "width": 860,
         "height": 560,
         "minWidth": 640,

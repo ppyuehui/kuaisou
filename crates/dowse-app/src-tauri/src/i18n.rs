@@ -78,7 +78,7 @@ pub struct Strings {
 }
 
 const ZH: Strings = Strings {
-    tooltip_idle_prefix: "dowse — ",
+    tooltip_idle_prefix: "快搜 — ",
     tooltip_idle_suffix: " 呼出",
     menu_show: "呼出",
     menu_autostart: "开机自启",
@@ -88,9 +88,9 @@ const ZH: Strings = Strings {
     rebuild_item: "重建",
     remove_item: "移除",
     add_folder_item: "添加文件夹…",
-    tooltip_indexing_prefix: "dowse — 索引中 ",
+    tooltip_indexing_prefix: "快搜 — 索引中 ",
     tooltip_indexing_suffix: " 篇",
-    tooltip_ocr_prefix: "dowse — 图片识别 ",
+    tooltip_ocr_prefix: "快搜 — 图片识别 ",
     dialog_pick_folder: "选择要索引的文件夹",
     stale_root_error: "找不到这个索引根，菜单可能已过期，请重新打开托盘菜单",
     ctx_open: "打开文件",
@@ -100,9 +100,9 @@ const ZH: Strings = Strings {
 };
 
 const EN: Strings = Strings {
-    tooltip_idle_prefix: "dowse — ",
+    tooltip_idle_prefix: "KuaiSou — ",
     tooltip_idle_suffix: " to open",
-    menu_show: "Show dowse",
+    menu_show: "Show KuaiSou",
     menu_autostart: "Launch at startup",
     menu_quit: "Quit",
     folders_submenu: "Indexed folders",
@@ -110,9 +110,9 @@ const EN: Strings = Strings {
     rebuild_item: "Rebuild",
     remove_item: "Remove",
     add_folder_item: "Add folder…",
-    tooltip_indexing_prefix: "dowse — indexing ",
+    tooltip_indexing_prefix: "KuaiSou — indexing ",
     tooltip_indexing_suffix: " docs",
-    tooltip_ocr_prefix: "dowse — image OCR ",
+    tooltip_ocr_prefix: "KuaiSou — image OCR ",
     dialog_pick_folder: "Choose a folder to index",
     stale_root_error: "Could not find this index root. The menu may be stale; reopen the tray menu.",
     ctx_open: "Open file",

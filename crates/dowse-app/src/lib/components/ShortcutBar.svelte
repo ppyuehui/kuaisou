@@ -12,7 +12,7 @@
 			<circle cx="7" cy="6.4" r="5" fill="var(--accent-strong)" />
 			<circle cx="11" cy="11.6" r="5" fill="var(--accent-strong)" />
 		</svg>
-		<span class="brand-name">dowse</span>
+		<span class="brand-name">快搜</span>
 	</span>
 
 	<span class="spacer"></span>

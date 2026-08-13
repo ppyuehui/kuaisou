@@ -1,10 +1,10 @@
 English | [简体中文](README.zh-CN.md)
 
 <p align="center">
-  <img src="crates/dowse-app/src-tauri/icons/128x128@2x.png" width="96" height="96" alt="dowse logo">
+  <img src="crates/dowse-app/src-tauri/icons/128x128@2x.png" width="96" height="96" alt="KuaiSou logo">
 </p>
 
-<h1 align="center">dowse</h1>
+<h1 align="center">快搜 KuaiSou</h1>
 
 <p align="center">
   Open-source local file content search for Windows. Find file names, PDF and Office contents, source code, and text inside screenshots — one hotkey away.
@@ -27,9 +27,11 @@ English | [简体中文](README.zh-CN.md)
   <a href="https://glama.ai/mcp/servers/ltspace/dowse"><img src="https://glama.ai/mcp/servers/ltspace/dowse/badges/score.svg" alt="Glama MCP server score"></a>
 </p>
 
-The name comes from a dowsing rod.
+**快搜 (KuaiSou)** means "quick search" — summon it with one hotkey and search your local files in an instant.
 
-![Dowse searching the fictional Northstar workspace, with ranked project files on the left and a live brief preview on the right](docs/screenshots/hero.png)
+> **Fork notice** — this repository is forked from the original [`ltspace/dowse`](https://github.com/ltspace/dowse) (upstream: <https://github.com/ltspace/dowse>). It is maintained independently with local customizations and does not submit pull requests upstream.
+
+![KuaiSou searching the fictional Northstar workspace, with ranked project files on the left and a live brief preview on the right](docs/screenshots/hero.png)
 
 ## Motivation
 
@@ -39,7 +41,7 @@ No Windows tool satisfies all three of the following at once:
 - Recognize and index text inside images on ordinary Windows PCs without requiring a Copilot+ device
 - One hotkey to summon, full keyboard operation, no perceptible latency
 
-The closest open-source implementation is sist2, but it targets Linux (on Windows it only runs via Docker), treats Chinese text as trigrams, and the project is no longer maintained. dowse is a Windows-native implementation built around these three points.
+The closest open-source implementation is sist2, but it targets Linux (on Windows it only runs via Docker), treats Chinese text as trigrams, and the project is no longer maintained. KuaiSou is a Windows-native implementation built around these three points.
 
 ## Features
 
@@ -53,9 +55,9 @@ The closest open-source implementation is sist2, but it targets Linux (on Window
 | 🤖 **MCP server** | Exposes local search to AI agents over stdio |
 | 🚀 **NTFS fast path** | MFT enumeration + USN Journal, admin-only, falls back transparently otherwise |
 
-## dowse vs. the alternatives
+## KuaiSou vs. the alternatives
 
-| | dowse | Everything | Windows Search | sist2 |
+| | KuaiSou | Everything | Windows Search | sist2 |
 |---|:---:|:---:|:---:|:---:|
 | File name search | ✓ | ✓ | ✓ | ✓ |
 | Document content search | ✓ (persistent index) | on-demand scan | depends on indexed locations and filters | ✓ |
@@ -109,7 +111,7 @@ write path, not from faster recognition.
 
 ## Quick start
 
-**Download** — grab the installer from the [latest release](https://github.com/ltspace/dowse/releases/latest) (`dowse-app_*_x64-setup.exe`), run it, then `Alt+\`` to summon.
+**Download** — grab the installer from this fork's [latest release](https://gitee.com/ppyuehui/dowse/releases) (`dowse-app_*_x64-setup.exe`), run it, then `Alt+\`` to summon.
 
 The installer is unsigned, so Windows SmartScreen will flag it on first run. To proceed, click **More info** and then **Run anyway**. A code-signing certificate is a recurring cost that is hard to justify for an independent project; it may be reconsidered for a future release.
 
@@ -123,7 +125,7 @@ cargo install --path crates/dowse   # from a local checkout
 **Build from source:**
 
 ```powershell
-git clone https://github.com/ltspace/dowse && cd dowse
+git clone https://gitee.com/ppyuehui/dowse && cd dowse
 
 # CLI
 cargo run -p dowse -- index D:\docs      # build the index
@@ -179,6 +181,8 @@ Index updates run on a two-tier scheme: while running, file system events drive 
 
 ## Roadmap
 
+Upstream milestones (inherited from the original dowse):
+
 | # | Scope | Status |
 |---|---|---|
 | 1 | CLI indexing and search: Chinese segmentation, GBK detection, highlighting | ✅ Done |
@@ -186,8 +190,20 @@ Index updates run on a two-tier scheme: while running, file system events drive 
 | 3 | Incremental indexing: file watching, startup reconciliation | ✅ Done |
 | 4 | OCR pipeline: screenshot text into the index | ✅ Done |
 | 5 | MCP server | ✅ Done |
-| 6 | NTFS MFT / USN Journal fast path | ✅ Done (the admin-only fast path itself is not yet verified on real hardware — see the design doc's implementation notes) |
-| 7 | Semantic search (embeddings, hybrid ranking) | 🔍 Exploring |
+| 6 | NTFS MFT / USN Journal fast path | ✅ Done |
+
+This fork's customizations and enhancements:
+
+| # | Scope | Status |
+|---|---|---|
+| 7 | Multi-root indexing: add/remove several index directories from the settings panel | ✅ Done |
+| 8 | Light/dark theme switch (system / light / dark, hot) | ✅ Done |
+| 9 | Removed translucency/glass effects; opaque solid window | ✅ Done |
+| 10 | Window controls: minimize=hides, maximize/restore, restore last position on show, native drag/resize | ✅ Done |
+| 11 | Parallel full rebuild (~2.4x faster measured) | ✅ Done |
+| 12 | Result rows select on click only (no hover selection) | ✅ Done |
+| 13 | Audit hardening: zip-bomb guard, OCR queue crash recovery, RAII rebuild lock, atomic writes, etc. | ✅ Done |
+| 14 | Semantic search (embeddings, hybrid ranking) | 🔍 Exploring |
 
 ## Stack
 
@@ -210,27 +226,3 @@ Full policy — data collection, storage, retention, and contact: [PRIVACY.md](P
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
-
-## A note
-
-As a kid I had a single Coolpad phone. In the long stretches without internet, I would open
-the file manager and study the files one by one, trying to figure out what they were and how
-they fit together, forever lost among files scattered everywhere with no idea what any of
-them held.
-
-In college I bought a QNAP NAS and discovered Qsirch, a genuinely good thing, except it lived
-only on the NAS and had no Windows version.
-
-screenpipe got there first, a kind of primitive version of the memory grain from Black Mirror
-S1E3, The Entire History of You. Very future, very post-modern, close to the ultimate form of
-local search, but far too heavy for the world as it is now.
-
-So I made dowse.
-
-The film Her reads like a prophecy: before long, AI will run our personal computers. dowse
-takes its cue from that and exposes an MCP interface for AI to call, except what it searches
-is your own files, on your own machine.
-
-If you are a little obsessive, if you like keeping things in order, if you want real control
-over your own file system, this is for you. Performance and beauty are things I cared about
-just as much.
