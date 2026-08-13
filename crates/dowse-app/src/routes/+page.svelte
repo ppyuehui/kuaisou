@@ -202,9 +202,14 @@
 	/// 期间又发现新图片时顺势抬高 total，保证 processed 不会算出负数）。
 	function applyOcrPending(pending: number) {
 		if (pending <= 0) {
-			indexingPhase = 'idle';
-			indexingOcrProcessed = 0;
-			indexingOcrTotal = 0;
+			// 只有当前正处在 OCR 阶段才归位成 idle——否则一轮**新的**文本阶段
+			// 重建正在跑的时候，上一轮 OCR 队列的"收尾 pending=0"事件会把
+			// 'text' 打回 'idle'，全屏进度引导层提前消失、进度直播中断。
+			if (indexingPhase === 'ocr') {
+				indexingPhase = 'idle';
+				indexingOcrProcessed = 0;
+				indexingOcrTotal = 0;
+			}
 			return;
 		}
 		indexingPhase = 'ocr';
@@ -800,9 +805,15 @@
 	}
 
 	function finishDividerResize(e: PointerEvent) {
+		resetDividerResize();
+	}
+
+	/// 幂等复位分隔条拖拽状态：正常 pointerup/pointercancel 走这，窗口在拖动中途
+	/// 被隐藏/失焦导致 pointerup 永远不到达时也走这（shown 事件兜底）——否则
+	/// `splitResizing`、全局 col-resize 光标、以及 Rust 侧 `setDragSuppressed(true)`
+	/// 全部卡死，浮窗下次唤出时连窗口都拖不动。
+	function resetDividerResize() {
 		if (!splitResizing) return;
-		const divider = e.currentTarget as HTMLInputElement;
-		if (divider.hasPointerCapture(e.pointerId)) divider.releasePointerCapture(e.pointerId);
 		splitResizing = false;
 		document.body.classList.remove('split-resizing');
 		api.setDragSuppressed(false);
@@ -879,6 +890,10 @@
 			.catch(() => {});
 
 		document.addEventListener('click', handleDocumentClick);
+		// 分隔条 pointer capture 意外丢失、且窗口没隐藏（shown 兜底没触发）时，
+		// document 级的 pointerup 也能把拖拽状态复位，双保险。
+		document.addEventListener('pointerup', resetDividerResize);
+		document.addEventListener('pointercancel', resetDividerResize);
 
 		const unlistenShown = listen('dowse://shown', () => {
 			refreshIndexStatus();
@@ -890,6 +905,9 @@
 			playShowAnimation();
 			closeMenus();
 			reportShownPerf();
+			// 兜底：拖动分隔条中途窗口被隐藏（失焦自动隐藏）时 pointerup 到不了，
+			// 拖拽状态和 Rust 侧拖窗抑制会卡死；唤出时强制复位。
+			resetDividerResize();
 		});
 		const unlistenEffect = listen<EffectLevel>('dowse://effect-level', (evt) => {
 			document.documentElement.dataset.effect = evt.payload;
@@ -936,6 +954,8 @@
 			splitResizeObserver.disconnect();
 			document.body.classList.remove('split-resizing');
 			document.removeEventListener('click', handleDocumentClick);
+			document.removeEventListener('pointerup', resetDividerResize);
+			document.removeEventListener('pointercancel', resetDividerResize);
 			unlistenShown.then((f) => f());
 			unlistenEffect.then((f) => f());
 			unlistenHotkeyChanged.then((f) => f());

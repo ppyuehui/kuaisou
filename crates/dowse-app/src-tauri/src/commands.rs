@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -231,16 +232,13 @@ pub fn reveal_in_folder(_path: String) -> Result<(), String> {
 /// "实时直播"效果），频率由 dowse 的 `PROGRESS_INTERVAL` 控制。
 #[tauri::command]
 pub async fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto, String> {
-    {
-        let guard = app.state::<RebuildGuard>();
-        if !guard.try_begin() {
-            return Err("已有一次建索引正在进行中，请稍候".to_string());
-        }
-    }
+    let guard = app.state::<Arc<RebuildGuard>>();
+    let Some(_rebuild_guard) = guard.try_begin() else {
+        return Err("已有一次建索引正在进行中，请稍候".to_string());
+    };
     let target = match PathBuf::from(&dir).canonicalize() {
         Ok(t) => t,
         Err(_) => {
-            app.state::<RebuildGuard>().end();
             return Err("目录不存在".to_string());
         }
     };
@@ -249,12 +247,13 @@ pub async fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexSt
     app.state::<IndexingStatus>()
         .set_total(dowse::count_index_files(&target));
     let app_for_work = app.clone();
+    // `_rebuild_guard` move 进后台线程，无论正常完成还是 panic，drop 都会
+    // 释放重建独占权（旧实现手动 end()，线程 panic 时会永久锁死）。
     let result = tauri::async_runtime::spawn_blocking(move || {
         crate::rebuild::perform_rebuild(&app_for_work, target)
     })
     .await
     .map_err(|e| format!("建索引线程异常：{e}"))?;
-    app.state::<RebuildGuard>().end();
     result
 }
 
@@ -267,12 +266,10 @@ pub async fn rebuild_index(app: tauri::AppHandle, dir: String) -> Result<IndexSt
 /// 主窗口无响应。
 #[tauri::command]
 pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDto, String> {
-    {
-        let guard = app.state::<RebuildGuard>();
-        if !guard.try_begin() {
-            return Err("已有一次建索引正在进行中，请稍候".to_string());
-        }
-    }
+    let guard = app.state::<Arc<RebuildGuard>>();
+    let Some(_rebuild_guard) = guard.try_begin() else {
+        return Err("已有一次建索引正在进行中，请稍候".to_string());
+    };
     let target = PathBuf::from(&dir);
     // 预扫文件数：文本阶段真实进度百分比的分母（同 rebuild_index）。
     app.state::<IndexingStatus>()
@@ -283,7 +280,6 @@ pub async fn add_root(app: tauri::AppHandle, dir: String) -> Result<IndexStatsDt
     })
     .await
     .map_err(|e| format!("建索引线程异常：{e}"))?;
-    app.state::<RebuildGuard>().end();
     result
 }
 
@@ -297,12 +293,10 @@ pub async fn remove_root(
     app: tauri::AppHandle,
     dir: String,
 ) -> Result<crate::rebuild::RemoveRootStatsDto, String> {
-    {
-        let guard = app.state::<RebuildGuard>();
-        if !guard.try_begin() {
-            return Err("已有一次建索引正在进行中，请稍候".to_string());
-        }
-    }
+    let guard = app.state::<Arc<RebuildGuard>>();
+    let Some(_rebuild_guard) = guard.try_begin() else {
+        return Err("已有一次建索引正在进行中，请稍候".to_string());
+    };
     // 前端列表给的是 display_path（剥掉 `\\?\` 前缀），而 dowse 的
     // `remove_root_from_meta` 要求与 registered_roots 的原值**精确匹配**（Windows
     // 上是 canonicalize 出来的 `\\?\` 扩展路径）。这里把入参归一化后逐项比
@@ -318,7 +312,6 @@ pub async fn remove_root(
     })
     .await
     .map_err(|e| format!("建索引线程异常：{e}"))?;
-    app.state::<RebuildGuard>().end();
     if let Ok(stats) = &result {
         let _ = app.emit("dowse://root-removed", stats.removed);
     }

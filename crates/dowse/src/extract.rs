@@ -75,11 +75,15 @@ fn extract_text_with(path: &Path, rules: &IndexRules) -> Option<String> {
     // 若畸形输入触发深度递归把线程栈撑爆，那是栈溢出，走的是 SIGABRT/进程 abort，
     // `catch_unwind` 接不住，进程仍会整体退出——这一类只能靠上游解析库自身的
     // 递归深度限制来防，不在本函数的兜底范围内。
+    // 解压预算：跟单文件上限同额。压缩包本身 >max_file_bytes 已被上面挡住，
+    // 解压后的正文也按这个数封顶（防 zip 炸弹，见 read_zip_entry_budgeted）。
+    let budget = rules.max_file_bytes() as usize;
+
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match ext.as_str() {
         "pdf" => extract_pdf(path),
-        "docx" => extract_docx(path),
-        "xlsx" => extract_xlsx(path),
-        "pptx" => extract_pptx(path),
+        "docx" => extract_docx(path, budget),
+        "xlsx" => extract_xlsx(path, budget),
+        "pptx" => extract_pptx(path, budget),
         e if TEXT_EXTS.contains(&e) => read_text_smart(path),
         // 追加白名单里的扩展名当纯文本读（自动探测编码），跟内建文本类型同路。
         e if rules.is_extra_text_ext(e) => read_text_smart(path),
@@ -96,22 +100,36 @@ fn extract_pdf(path: &Path) -> Option<String> {
     pdf_extract::extract_text(path).ok()
 }
 
-/// 打开一个 zip 包里的单个条目，读成字节。条目不存在/包本身打不开（损坏、
-/// 加密）都走 None——密码保护的 Office 文件会在这里打不开 zip 结构，
-/// 自然跳过，不会 panic。
-fn read_zip_entry(path: &Path, entry_name: &str) -> Option<Vec<u8>> {
-    let file = fs::File::open(path).ok()?;
-    let mut archive = zip::ZipArchive::new(file).ok()?;
+/// 打开 zip 包里的单个条目，最多读 `budget` 字节的解压数据。条目不存在/包打不开/
+/// 读取出错走 None；**解压后超过 budget** 也走 None——这是防 zip 炸弹的硬上限：
+/// 压缩包整体被 `max_file_bytes` 挡过一道，但高压缩比条目能把 20MB 的包撑到数
+/// GB，无上限的 `read_to_end` 会 OOM。OOM 是 abort 级崩溃，`catch_unwind`
+/// （`extract_text` 那层）接不住，会直接杀掉常驻的托盘/监听进程；docx/xlsx/pptx
+/// 又会自动入索引，投毒文件放进取索引目录就自动触发。`ZipFile::size()` 声明的是
+/// 本地头里的"解压后大小"，可被伪造，不能拿它当唯一防线，必须用 `Take` 在读取
+/// 层兜底。
+fn read_zip_entry_budgeted(
+    archive: &mut zip::ZipArchive<fs::File>,
+    entry_name: &str,
+    budget: usize,
+) -> Option<Vec<u8>> {
     let mut entry = archive.by_name(entry_name).ok()?;
-    let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes).ok()?;
+    let take = (budget as u64).saturating_add(1);
+    let mut bytes = Vec::with_capacity(entry.size().min(budget as u64) as usize);
+    if (&mut entry).take(take).read_to_end(&mut bytes).is_err() || bytes.len() > budget {
+        return None;
+    }
     Some(bytes)
 }
 
 /// docx 是一个 zip 包，正文全部在 word/document.xml 里，文本节点是 `<w:t>`。
 /// 段落 `<w:p>` 闭合时补一个换行，避免不同段落的文字连成一整块无法阅读。
-fn extract_docx(path: &Path) -> Option<String> {
-    let xml = read_zip_entry(path, "word/document.xml")?;
+/// 解压正文超预算（默认 20MB，跟单文件上限同额）按"体积超限"返回 None，跟
+/// `extract_text_with` 对超限文件的跳过语义一致。
+fn extract_docx(path: &Path, budget: usize) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let xml = read_zip_entry_budgeted(&mut archive, "word/document.xml", budget)?;
     let text = extract_tagged_text(&xml, b"t", Some(b"p"));
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
@@ -121,37 +139,39 @@ fn extract_docx(path: &Path) -> Option<String> {
 /// xl/sharedStrings.xml，sheet 里只留索引号；覆盖不了共享字符串表的是
 /// 内联字符串（`<c t="inlineStr"><is><t>...</t></is></c>`），直接写在各
 /// xl/worksheets/sheet*.xml 里，两处都要读。两处的文本节点本地名都是 `<t>`。
-fn extract_xlsx(path: &Path) -> Option<String> {
+/// 每个条目的解压量和累计正文都受 `budget` 约束，超了就不读了（防 zip 炸弹）。
+fn extract_xlsx(path: &Path, budget: usize) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
 
     let mut text = String::new();
+    let mut remaining = budget;
 
-    if let Ok(mut entry) = archive.by_name("xl/sharedStrings.xml") {
-        let mut bytes = Vec::new();
-        if entry.read_to_end(&mut bytes).is_ok() {
-            drop(entry);
-            text.push_str(&extract_tagged_text(&bytes, b"t", None));
-            text.push('\n');
-        }
-    }
-
-    let sheet_names: Vec<String> = archive
-        .file_names()
-        .filter(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
-        .map(|n| n.to_string())
-        .collect();
-    for name in sheet_names {
-        let Ok(mut entry) = archive.by_name(&name) else {
-            continue;
-        };
-        let mut bytes = Vec::new();
-        if entry.read_to_end(&mut bytes).is_err() {
-            continue;
-        }
-        drop(entry);
+    if remaining > 0
+        && let Some(bytes) = read_zip_entry_budgeted(&mut archive, "xl/sharedStrings.xml", remaining)
+    {
         text.push_str(&extract_tagged_text(&bytes, b"t", None));
         text.push('\n');
+        remaining = remaining.saturating_sub(bytes.len());
+    }
+
+    if remaining > 0 {
+        let sheet_names: Vec<String> = archive
+            .file_names()
+            .filter(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
+            .map(|n| n.to_string())
+            .collect();
+        for name in sheet_names {
+            if remaining == 0 {
+                break;
+            }
+            let Some(bytes) = read_zip_entry_budgeted(&mut archive, &name, remaining) else {
+                continue;
+            };
+            text.push_str(&extract_tagged_text(&bytes, b"t", None));
+            text.push('\n');
+            remaining = remaining.saturating_sub(bytes.len());
+        }
     }
 
     let text = text.trim();
@@ -159,8 +179,8 @@ fn extract_xlsx(path: &Path) -> Option<String> {
 }
 
 /// pptx 每页幻灯片是独立的 ppt/slides/slideN.xml，文本 run 是 `<a:t>`，
-/// 本地名同样是 `t`。幻灯片之间补空行分隔。
-fn extract_pptx(path: &Path) -> Option<String> {
+/// 本地名同样是 `t`。幻灯片之间补空行分隔。解压预算同上，超了就不读了。
+fn extract_pptx(path: &Path, budget: usize) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
 
@@ -172,17 +192,17 @@ fn extract_pptx(path: &Path) -> Option<String> {
     slide_names.sort();
 
     let mut text = String::new();
+    let mut remaining = budget;
     for name in slide_names {
-        let Ok(mut entry) = archive.by_name(&name) else {
+        if remaining == 0 {
+            break;
+        }
+        let Some(bytes) = read_zip_entry_budgeted(&mut archive, &name, remaining) else {
             continue;
         };
-        let mut bytes = Vec::new();
-        if entry.read_to_end(&mut bytes).is_err() {
-            continue;
-        }
-        drop(entry);
         text.push_str(&extract_tagged_text(&bytes, b"t", Some(b"p")));
         text.push('\n');
+        remaining = remaining.saturating_sub(bytes.len());
     }
 
     let text = text.trim();

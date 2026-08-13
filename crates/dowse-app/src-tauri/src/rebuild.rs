@@ -4,6 +4,7 @@
 //! 某一处状态"的偏差（症状 5：选完目录之后要能看得见、改得了）。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -28,6 +29,12 @@ fn emit_indexing_settled(app: &AppHandle) {
 /// 防止"重建索引"/"更改索引文件夹"/浮窗按钮三个入口并发触发重建——全量重建
 /// 期间旧索引目录会被删掉重建，重叠执行会互相踩踏（Windows 删目录、tantivy
 /// 写入端都不是可重入的）。
+///
+/// 用 `Arc<Self>` 托管（`app.manage(Arc::new(RebuildGuard::new()))`），
+/// [`RebuildGuard::try_begin`] 返回的 [`RebuildGuardGuard`] 是一个 Drop-guard：
+/// 持有它期间独占重建权，drop 时自动释放——包括工作线程 panic/提前 return
+/// 的所有路径。以前是 `try_begin()` + 手动 `end()`，工作线程 panic 时 `end()`
+/// 永不执行、原子位永久置真，此后所有重建入口被静默拒绝（只能重启）。
 pub struct RebuildGuard(AtomicBool);
 
 impl RebuildGuard {
@@ -35,16 +42,30 @@ impl RebuildGuard {
         Self(AtomicBool::new(false))
     }
 
-    /// 尝试拿到独占重建权，已经有一次在跑就返回 false（调用方据此提示用户
-    /// "已有一次建索引在进行中"，而不是让两次重建互相踩踏）。
-    pub fn try_begin(&self) -> bool {
+    /// 尝试拿到独占重建权，已经有一次在跑就返回 `None`（调用方据此提示用户
+    /// "已有一次建索引在进行中"）。拿到的 guard 要 move 进工作线程/闭包，
+    /// 它 drop 时释放独占权。
+    pub fn try_begin(self: &Arc<Self>) -> Option<RebuildGuardGuard> {
         self.0
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
+            .then_some(RebuildGuardGuard(self.clone()))
     }
 
-    pub fn end(&self) {
-        self.0.store(false, Ordering::Release);
+    /// 当前是否正有重建在跑（退出/托盘判断用）。RAII guard 保证任何失败路径
+    /// 都会释放，所以"忙"状态总是有界收敛的。
+    pub fn is_busy(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// 重建独占权的 RAII 守卫：持有期间其他入口的 `try_begin` 返回 `None`，
+/// drop 时把原子位复位。必须由工作路径在结束时 drop（正常返回/panic 都会）。
+pub struct RebuildGuardGuard(Arc<RebuildGuard>);
+
+impl Drop for RebuildGuardGuard {
+    fn drop(&mut self) {
+        self.0 .0.store(false, Ordering::Release);
     }
 }
 
@@ -139,6 +160,16 @@ pub fn perform_rebuild(app: &AppHandle, target: PathBuf) -> Result<IndexStatsDto
             emit_indexing_settled(app);
             crate::tray::set_busy(app, false);
             crate::tray::refresh_tooltip(app);
+            // 全量重建失败 = 旧索引目录已被删掉、新索引没建完（或刚被我方
+            // 清理掉半成品）。旧 SearchState 指向的 Searcher 已经废了，继续留着
+            // 会让前端拿过期数据接着搜——尝试重开，开不出就把搜索状态清空。
+            match dowse::Searcher::open(&index_dir) {
+                Ok(searcher) => app.state::<SearchState>().replace(searcher),
+                Err(_) => app.state::<SearchState>().clear(),
+            }
+            // 监听也停着没挂回去（perform_rebuild 开头 stop 了）——根还能读出来
+            // 就重新盯上，读不出来（索引确实没了）则维持空态，等用户重建。
+            restart_watch_after_root_op(app, &index_dir);
             return Err(err.to_string());
         }
     };
@@ -154,6 +185,11 @@ pub fn perform_rebuild(app: &AppHandle, target: PathBuf) -> Result<IndexStatsDto
             emit_indexing_settled(app);
             crate::tray::set_busy(app, false);
             crate::tray::refresh_tooltip(app);
+            // 索引建好了但打不开（异常场景）：搜索状态清空，别让前端拿旧的
+            // Searcher 继续搜；根在 meta 里，把监听挂回去，重建的进度/对账
+            // 仍能继续跑。
+            app.state::<SearchState>().clear();
+            restart_watch_after_root_op(app, &index_dir);
             return Err(err.to_string());
         }
     };

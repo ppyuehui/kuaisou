@@ -36,6 +36,15 @@ struct Processed {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct QueueState {
     pending: HashMap<String, Stat>,
+    /// 已出队、正在被 worker 识别的条目（`pop_pending` 从 `pending` 挪进来，
+    /// `mark_processed`/`requeue` 移走）。单独占一张表而不是直接删掉，是为了
+    /// 堵住"出队 → 落盘 → 崩溃"的丢图窗口：worker A 出队一张、另一处线程
+    /// 恰好 save，若条目直接消失，崩溃后这张图既不在 pending 也不在 processed，
+    /// 索引里的占位文档 (mtime,size) 又与磁盘一致，启动对账判定"无变化"——
+    /// 图片文字永久丢失。有了 in_flight，任何时刻的落盘状态都完整覆盖这张图，
+    /// 崩溃重启后 `load_state` 会把 in_flight 全部并回 pending 重新识别。
+    #[serde(default)]
+    in_flight: HashMap<String, Stat>,
     processed: HashMap<String, Processed>,
 }
 
@@ -104,41 +113,57 @@ impl OcrQueue {
     }
 
     /// 把一张图片放进待处理队列（worker 池后台消化）。已经在 pending 里的同路径
-    /// 会被新的 (mtime,size) 覆盖——文件在排队等待期间又变了，以最新状态为准。
+    /// 会被新的 (mtime,size) 覆盖——文件在排队等待期间又变了，以最新状态为准；
+    /// 如果它正在被识别（in_flight），旧的 in_flight 条目一并丢弃，避免识别完
+    /// 回填时用旧 stat 覆盖新状态。
     pub(crate) fn enqueue(&self, path: PathBuf, mtime: i64, size: u64) {
         let mut state = self.state.lock().expect("ocr queue mutex poisoned");
-        state.pending.insert(key_of(&path), Stat { mtime, size });
+        let key = key_of(&path);
+        state.in_flight.remove(&key);
+        state.pending.insert(key, Stat { mtime, size });
     }
 
-    /// worker 取一项待处理。空队列返回 None，调用方自己决定要不要小睡。
+    /// worker 取一项待处理：从 `pending` 挪进 `in_flight`（见 `in_flight` 字段的
+    /// 文档——出队后立即消失会让崩溃丢图，挪表则任何落盘快照都覆盖这张图）。
+    /// 空队列返回 None，调用方自己决定要不要小睡。
     pub(crate) fn pop_pending(&self) -> Option<(PathBuf, i64, u64)> {
         let mut state = self.state.lock().expect("ocr queue mutex poisoned");
         let key = state.pending.keys().next().cloned()?;
         let stat = state.pending.remove(&key)?;
+        state.in_flight.insert(key.clone(), stat);
         Some((PathBuf::from(key), stat.mtime, stat.size))
     }
 
-    /// 待处理项数，给 CLI 的 drain_ocr_queue 判断"清空了没"用。
+    /// 待处理项数，给 CLI 的 drain_ocr_queue 判断"清空了没"用。含正在识别的
+    /// in_flight 项——它们还没真正落进 processed，清空判断不能漏掉。
     pub fn pending_len(&self) -> usize {
-        self.state
-            .lock()
-            .expect("ocr queue mutex poisoned")
-            .pending
-            .len()
+        let state = self.state.lock().expect("ocr queue mutex poisoned");
+        state.pending.len() + state.in_flight.len()
     }
 
-    /// worker 识别完一张图片后回填：写进 processed 缓存（空字符串代表"已处理但无
-    /// 文字"，同样不再重试，见设计文档"范围"一节）。
+    /// worker 识别完一张图片后回填：从 `in_flight` 移到 `processed` 缓存（空
+    /// 字符串代表"已处理但无文字"，同样不再重试，见设计文档"范围"一节）。
     pub(crate) fn mark_processed(&self, path: PathBuf, mtime: i64, size: u64, content: String) {
         let mut state = self.state.lock().expect("ocr queue mutex poisoned");
+        let key = key_of(&path);
+        state.in_flight.remove(&key);
         state.processed.insert(
-            key_of(&path),
+            key,
             Processed {
                 mtime,
                 size,
                 content,
             },
         );
+    }
+
+    /// 写回索引失败时，把一张 in_flight 的图挪回 `pending` 等下轮重试（不能只
+    /// `enqueue`：那会留下一份 in_flight 陈旧条目；也不能什么都不做：那就丢了）。
+    pub(crate) fn requeue(&self, path: PathBuf, mtime: i64, size: u64) {
+        let mut state = self.state.lock().expect("ocr queue mutex poisoned");
+        let key = key_of(&path);
+        state.in_flight.remove(&key);
+        state.pending.insert(key, Stat { mtime, size });
     }
 
     /// 落盘。rebuild_index/reconcile 批量入队后各调一次；IndexUpdater::apply 在
@@ -163,6 +188,7 @@ impl OcrQueue {
             roots.iter().any(|r| path.starts_with(r)) && path.exists()
         };
         state.pending.retain(|key, _| keep(key));
+        state.in_flight.retain(|key, _| keep(key));
         state.processed.retain(|key, _| keep(key));
     }
 }
@@ -179,7 +205,7 @@ fn queue_path(index_dir: &Path) -> PathBuf {
 /// 只是个"能省则省"的进度缓存，丢了大不了重新识别一遍，不该拖累索引整体可用性。
 fn load_state(index_dir: &Path) -> QueueState {
     let path = queue_path(index_dir);
-    match std::fs::read(&path) {
+    let mut state = match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|err| {
             eprintln!(
                 "OCR 队列状态解析失败，按空队列处理 {}: {err}",
@@ -188,7 +214,14 @@ fn load_state(index_dir: &Path) -> QueueState {
             QueueState::default()
         }),
         Err(_) => QueueState::default(),
+    };
+    // 崩溃恢复：上一次落盘时仍在 in_flight 的条目（worker 正在识别、还没回填
+    // processed）全部并回 pending，重启后重新识别——绝不把"出队未完成"的状态
+    // 当成"已处理"或干脆弄丢。
+    for (key, stat) in std::mem::take(&mut state.in_flight) {
+        state.pending.insert(key, stat);
     }
+    state
 }
 
 fn save_state(index_dir: &Path, state: &QueueState) -> Result<()> {
@@ -274,13 +307,18 @@ mod tests {
         let (popped_path, mtime, size) = queue.pop_pending().expect("队列非空应该能取出一项");
         assert_eq!(popped_path, path);
         assert_eq!((mtime, size), (10, 20));
-        assert_eq!(queue.pending_len(), 0, "取走之后队列应该清空");
+        assert_eq!(
+            queue.pending_len(),
+            1,
+            "取走之后进入 in_flight，仍在待处理口径里（防崩溃丢图）"
+        );
 
         queue.mark_processed(popped_path.clone(), mtime, size, "识别结果".to_string());
         assert_eq!(
             queue.cached_content(&popped_path, 10, 20).as_deref(),
             Some("识别结果")
         );
+        assert_eq!(queue.pending_len(), 0, "回填 processed 后队列清空");
         assert!(
             queue.cached_content(&popped_path, 999, 20).is_none(),
             "stat 对不上不该命中缓存"
@@ -314,6 +352,35 @@ mod tests {
             1,
             "已处理的那张应该被记住，重启不会重新识别"
         );
+    }
+
+    /// 崩溃恢复：出队后（in_flight）、回填 processed 前崩溃，重启加载时这张图
+    /// 必须并回 pending 重新识别，不能丢。
+    #[test]
+    fn crash_between_pop_and_mark_processed_recovers_into_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_dir = dir.path().join("index");
+
+        {
+            let queue = OcrQueue::for_index_dir(&index_dir);
+            queue.enqueue(PathBuf::from("a.png"), 1, 2);
+            queue.pop_pending().expect("非空应该能取出一张");
+            // 取走但没 mark_processed 就"崩溃"——此刻的落盘快照里 a.png 在 in_flight。
+            queue.save().unwrap();
+        }
+
+        let reloaded = load_state(&index_dir);
+        assert_eq!(
+            reloaded.in_flight.len(),
+            0,
+            "in_flight 不应出现在重启后的状态里"
+        );
+        assert_eq!(
+            reloaded.pending.len(),
+            1,
+            "in_flight 条目必须并回 pending，重启重新识别"
+        );
+        assert!(reloaded.pending.contains_key("a.png"));
     }
 
     /// compact 应该只留下"落在给定根之下、且文件仍在磁盘上"的 pending 条目——

@@ -20,7 +20,6 @@ use windows::Win32::System::Ioctl::{
 use crate::cursor::{CursorSync, UsnCursor, VolumeKey};
 use crate::events::{Debouncer, WatchEvent};
 use crate::frn_table::FrnTable;
-use crate::indexer::walk_index_files;
 use crate::updater::IndexUpdater;
 use crate::usn_translate::{UsnOutcome, UsnRecord, UsnTranslator, parse_usn_record_v2_bytes};
 use crate::volume;
@@ -189,15 +188,18 @@ fn read_journal_batch(
 }
 
 /// 把翻译层的结果展开成一批 [`WatchEvent`]。是不是目录记录里自带，不用像
-/// notify 那样临时 stat；但"目录整体移入监听范围"这种情形，子文件不会各自
-/// 产生 USN 记录（它们自己的父 FRN 没变），需要真的下钻一次磁盘——跟
-/// watch.rs::translate_rename 对目录改名的处理是同一套道理，行为对齐。
+/// notify 那样临时 stat；"目录整体移入监听范围"这种情形直接发 `UpsertDir`
+/// 标记——**不在这个（USN reader）线程里下钻整目录**：walk 大目录会阻塞该卷
+/// Journal 的读取数秒，挤掉/滚掉 live 记录（虽然游标下次启动会兜底，但 live
+/// 索引会滞后）。下钻交给消费侧 `IndexUpdater::apply` 的 `UpsertTree` 分支
+/// （`walkdir` 在那边的独立线程上做），跟 watch.rs::translate_rename 对目录
+/// 改名的处理是同一套设计。
 fn outcome_to_events(outcome: UsnOutcome) -> Vec<WatchEvent> {
     match outcome {
         UsnOutcome::None => Vec::new(),
         UsnOutcome::Upsert { path, is_dir } => {
             if is_dir {
-                walk_index_files(&path).map(WatchEvent::Upsert).collect()
+                vec![WatchEvent::UpsertDir(path)]
             } else {
                 vec![WatchEvent::Upsert(path)]
             }
@@ -215,9 +217,7 @@ fn outcome_to_events(outcome: UsnOutcome) -> Vec<WatchEvent> {
             to_is_dir,
         } => {
             if to_is_dir {
-                let mut events = vec![WatchEvent::RemoveDir(from)];
-                events.extend(walk_index_files(&to).map(WatchEvent::Upsert));
-                events
+                vec![WatchEvent::RemoveDir(from), WatchEvent::UpsertDir(to)]
             } else {
                 vec![WatchEvent::Rename { from, to }]
             }

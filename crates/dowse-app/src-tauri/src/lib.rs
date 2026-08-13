@@ -116,7 +116,7 @@ pub fn run() {
         .manage(AutoHideSuppressor::new())
         .manage(ContextMenuTarget::new())
         .manage(IndexingStatus::new())
-        .manage(RebuildGuard::new())
+        .manage(std::sync::Arc::new(RebuildGuard::new()))
         .manage(HotkeyPerfState::new())
         .invoke_handler(tauri::generate_handler![
             commands::index_status,

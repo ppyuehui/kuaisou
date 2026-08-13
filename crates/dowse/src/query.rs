@@ -336,10 +336,10 @@ fn parse_date_bound(operand: &str) -> Result<DateBound> {
     // 同一天/同一月的"下一格"起点：有日就 +1 天（UTC 下一天恒为 86_400_000 毫秒，
     // 没有夏令时/闰秒的坑），没日就跳到次月 1 号。
     let next_ms = if has_day {
-        start_ms + MS_PER_DAY
+        start_ms.saturating_add(MS_PER_DAY)
     } else {
         let (ny, nm) = if month == 12 {
-            (year + 1, 1)
+            (year.saturating_add(1), 1)
         } else {
             (year, month as u32 + 1)
         };
@@ -428,7 +428,11 @@ fn date_to_ms(year: i64, month: u32, day: u32) -> i64 {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
     let days = era * 146097 + doe - 719468; // 距 1970-01-01 的天数
-    days * MS_PER_DAY
+    // 饱和乘：极端年份（用户/agent 输入 `mtime:>99999999999-01-01` 这类值）会让
+    // days 溢出 i64，直接 `*` 在 debug 构建 panic、release 静默回绕成垃圾时间戳
+    // （过滤条件悄悄失效）。饱和到 ±i64::MAX 后，"大于极大"匹配空集、"小于极大"
+    // 匹配全集，语义仍然自洽、不会崩。
+    days.saturating_mul(MS_PER_DAY)
 }
 
 #[cfg(test)]

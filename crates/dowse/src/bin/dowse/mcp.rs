@@ -26,6 +26,12 @@ const HL_CLOSE: &str = "»";
 /// search 工具的默认返回条数。
 const DEFAULT_SEARCH_LIMIT: usize = 10;
 
+/// MCP 工具入参的上限（agent 侧可被提示注入污染，防止意外的大输入打爆
+/// 分词/收集器）：查询串最多 8KB、分页 offset 最多 10 万（再多也没意义，
+/// 只是白白线性扫描）。
+const MAX_MCP_QUERY_BYTES: usize = 8 * 1024;
+const MAX_MCP_OFFSET: usize = 100_000;
+
 // ---------- 工具参数 ----------
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -270,11 +276,15 @@ impl DowseMcpServer {
         if query.trim().is_empty() {
             return Err(McpError::invalid_params("query 不能为空", None));
         }
+        if query.len() > MAX_MCP_QUERY_BYTES {
+            return Err(McpError::invalid_params("query 太长（上限 8KB）", None));
+        }
         let limit = limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
         if limit == 0 {
             return Err(McpError::invalid_params("limit 必须大于 0", None));
         }
-        let offset = offset.unwrap_or(0);
+        // offset 无界会线性扫描（TopDocs 带 offset 仍要遍历到窗口），夹到上限。
+        let offset = offset.unwrap_or(0).min(MAX_MCP_OFFSET);
         let sort_mode = parse_sort(sort.as_deref())?;
 
         // ext 是单个逗号分隔字符串（"md" 或 "md,pdf"），按逗号拆开后走和 CLI 同一套
@@ -331,6 +341,9 @@ impl DowseMcpServer {
         }
         if query.trim().is_empty() {
             return Err(McpError::invalid_params("query 不能为空", None));
+        }
+        if query.len() > MAX_MCP_QUERY_BYTES {
+            return Err(McpError::invalid_params("query 太长（上限 8KB）", None));
         }
 
         let searcher = match open_and_reload(&self.index_dir) {

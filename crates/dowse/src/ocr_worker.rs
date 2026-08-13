@@ -212,7 +212,9 @@ fn flush_batch(
                 items.len()
             );
             for (path, mtime, size, _content) in items {
-                queue.enqueue(path, mtime, size);
+                // requeue 把 in_flight 条目挪回 pending（只 enqueue 会留下陈旧的
+                // in_flight 条目）。
+                queue.requeue(path, mtime, size);
             }
         }
     }

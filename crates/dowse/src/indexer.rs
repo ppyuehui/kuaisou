@@ -522,6 +522,10 @@ pub fn rebuild_index_with_progress(
 
 /// 一次重建尝试：删旧目录、建新索引、把 `files` 全部写进去，返回收录/跳过计数
 /// 和 USN 游标基线，交给 `finish_rebuild` 收尾。失败时上层决定要不要整次重试。
+///
+/// 非瞬时失败时这里会顺手把半成品索引目录清掉：旧目录已删、新目录只建到一半
+/// （未 commit、没有 meta.json），留着只会让下次打开报"读不到索引元数据，请
+/// 重建"——用户不明所以，清干净反而能引导重新开始。
 fn rebuild_index_attempt(
     index_dir: &Path,
     target_dir: &Path,
@@ -533,6 +537,23 @@ fn rebuild_index_attempt(
     }
     std::fs::create_dir_all(index_dir)?;
 
+    let result = run_attempt(index_dir, target_dir, writer_threads, on_progress);
+    if result.is_err() {
+        // 尽力而为：失败路径上 writer 已被 drop、句柄已释放，通常能删干净；
+        // 万一删不掉（杀软延迟）留个半成品目录，也比误导性报错好查。
+        let _ = remove_dir_all_retrying(index_dir);
+    }
+    result
+}
+
+/// `rebuild_index_attempt` 的实际建索引主体（把"建目录"和"写索引"分开，好让
+/// 外层在失败时清理半成品目录）。返回前保证 `writer` 已经 drop，方便清理。
+fn run_attempt(
+    index_dir: &Path,
+    target_dir: &Path,
+    writer_threads: usize,
+    on_progress: &mut (impl FnMut(IndexProgress) + Send),
+) -> Result<(usize, usize, usize, HashMap<VolumeKey, UsnCursor>)> {
     let (schema, fields) = build_schema();
     let index = Index::create_in_dir(index_dir, schema)?;
     register_tokenizers(&index);
@@ -577,6 +598,9 @@ fn rebuild_index_attempt(
     let skipped = Arc::new(AtomicUsize::new(0));
     let skipped_oversize = Arc::new(AtomicUsize::new(0));
     let processed = Arc::new(AtomicUsize::new(0));
+    // 已上报的最大进度值：worker 用 fetch_max 竞争，保证 on_progress 收到的
+    // processed 单调递增（并行下跨边界上报会乱序）。
+    let last_reported = Arc::new(AtomicUsize::new(0));
     let first_err = Arc::new(Mutex::new(None));
     let prog = Arc::new(Mutex::new(on_progress));
 
@@ -587,6 +611,7 @@ fn rebuild_index_attempt(
             let skipped = Arc::clone(&skipped);
             let skipped_oversize = Arc::clone(&skipped_oversize);
             let processed = Arc::clone(&processed);
+            let last_reported = Arc::clone(&last_reported);
             let first_err = Arc::clone(&first_err);
             let prog = Arc::clone(&prog);
             // worker 里只读共享数据：writer/fields/files/index_dir 都按共享引用
@@ -629,11 +654,17 @@ fn rebuild_index_attempt(
                     }
                     let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
                     if p % PROGRESS_INTERVAL == 0 {
-                        let mut guard = prog.lock().unwrap_or_else(|e| e.into_inner());
-                        guard(IndexProgress {
+                        // 并行下不同 worker 各自跨过边界，上报顺序可能乱序（快的
+                        // worker 先报 100、慢的后来才报 50）——fetch_max 保证只有
+                        // 严格更大的值才会真的回调，进度单调不回跳。
+                        let prev = last_reported.fetch_max(p, Ordering::Relaxed);
+                        if prev < p {
+                            let mut guard = prog.lock().unwrap_or_else(|e| e.into_inner());
+                            guard(IndexProgress {
                             processed: p,
                             path: path.clone(),
                         });
+                        }
                     }
                 }
             });
@@ -746,11 +777,19 @@ mod tests {
         })?;
 
         assert_eq!(stats.indexed, total);
-        assert_eq!(
-            reports,
-            vec![PROGRESS_INTERVAL, PROGRESS_INTERVAL * 2],
-            "总数不是间隔整数倍时，最后一段不足一个间隔的尾巴不应触发额外回调"
+        assert!(!reports.is_empty(), "超过一个间隔就应该有进度回调");
+        // 并行 worker 各自跨边界、上报顺序可能乱序（快的先报 100、慢的后报 50），
+        // 但 fetch_max 单调化后：值必须严格递增、必须都是间隔的整数倍、最后一个
+        // 必须是 100（尾部不足一个间隔的 3 个文件不该触发多余的 150 回调）。
+        assert!(
+            reports.windows(2).all(|w| w[0] < w[1]),
+            "进度必须单调递增，不能回跳（并行乱序下尤其）"
         );
+        assert!(
+            reports.iter().all(|&r| r % PROGRESS_INTERVAL == 0),
+            "回调只能落在间隔边界上"
+        );
+        assert_eq!(*reports.last().unwrap(), PROGRESS_INTERVAL * 2);
         Ok(())
     }
 

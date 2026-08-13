@@ -20,4 +20,10 @@ impl SearchState {
         let mut guard = self.0.lock().expect("search state mutex poisoned");
         *guard = Some(searcher);
     }
+
+    /// 清空搜索状态（索引已不可用/被删时用），前端据此回到"选目录建索引"引导。
+    pub fn clear(&self) {
+        let mut guard = self.0.lock().expect("search state mutex poisoned");
+        *guard = None;
+    }
 }

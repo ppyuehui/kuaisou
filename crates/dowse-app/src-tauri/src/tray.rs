@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::image::Image;
@@ -12,7 +13,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::config::ConfigState;
 use crate::indexing_status::{IndexingPhase, IndexingStatus};
-use crate::rebuild::RebuildGuard;
+use crate::rebuild::{RebuildGuard, RebuildGuardGuard};
 use crate::state::SearchState;
 use crate::window_fx;
 
@@ -356,7 +357,22 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             let enabled = app.autolaunch().is_enabled().unwrap_or(false);
             let _ = apply_autostart(app, !enabled);
         }
-        MENU_QUIT => app.exit(0),
+        // 退出前先等重建收尾：重建进行中退出会让索引停在半写状态（旧目录已删、
+        // 新索引没 commit 完）。在后台线程轮询 RebuildGuard，空闲了再 exit——
+        // RAII guard 保证重建无论成败都会释放，等待有界收敛；再加 60s 保险上限，
+        // 避免异常情况把退出挂死。
+        MENU_QUIT => {
+            // 先 clone 出独占权的 Arc，再 move app 进线程（State guard 借用了 app）。
+            let guard = app.state::<Arc<RebuildGuard>>().inner().clone();
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                while guard.is_busy() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                app.exit(0);
+            });
+        }
         _ if id.starts_with(FOLDER_REBUILD_PREFIX) => {
             if let Ok(idx) = id[FOLDER_REBUILD_PREFIX.len()..].parse::<usize>() {
                 rebuild_folder(app, idx);
@@ -388,23 +404,24 @@ fn resolve_root_by_index(idx: usize) -> Option<PathBuf> {
 /// 两条路径统一在这里判断，托盘和浮窗（`commands::add_root`）复用同一个
 /// 判断，不会出现"这个入口忘了判断该走哪条路"的偏差。
 fn add_folder(app: &AppHandle) {
-    if !app.state::<RebuildGuard>().try_begin() {
+    let guard = app.state::<Arc<RebuildGuard>>();
+    let Some(rebuild_guard) = guard.try_begin() else {
         return;
-    }
+    };
     let app = app.clone();
     app.dialog()
         .file()
         .set_title(crate::i18n::strings().dialog_pick_folder)
+        // 重建独占守卫 move 进对话框回调：取消/失败/成功三路都在闭包结束时
+        // drop 自动释放，不会因为用户取消对话框而把独占权锁死。
         .pick_folder(move |folder| {
             let Some(folder) = folder else {
-                app.state::<RebuildGuard>().end();
                 return;
             };
             let Ok(target) = folder.into_path() else {
-                app.state::<RebuildGuard>().end();
                 return;
             };
-            spawn_add_or_bootstrap(&app, target);
+            spawn_add_or_bootstrap(&app, target, rebuild_guard);
         });
 }
 
@@ -415,16 +432,17 @@ fn has_existing_index() -> bool {
         .is_some()
 }
 
-fn spawn_add_or_bootstrap(app: &AppHandle, target: PathBuf) {
+fn spawn_add_or_bootstrap(app: &AppHandle, target: PathBuf, rebuild_guard: RebuildGuardGuard) {
     let bootstrap = !has_existing_index();
     let app = app.clone();
     std::thread::spawn(move || {
+        // 守卫随线程结束 drop（正常/panic 都释放独占权）。
+        let _rebuild_guard = rebuild_guard;
         let result = if bootstrap {
             crate::rebuild::perform_rebuild(&app, target)
         } else {
             crate::rebuild::perform_add_root(&app, target)
         };
-        app.state::<RebuildGuard>().end();
         match result {
             Ok(stats) => {
                 let _ = app.emit("dowse://rebuild-done", stats.indexed);
@@ -441,15 +459,16 @@ fn spawn_add_or_bootstrap(app: &AppHandle, target: PathBuf) {
 /// `dowse://rebuild-done`/`dowse://rebuild-error` 事件，浮窗开着的话会照常
 /// 收到刷新（跟托盘触发全量重建的既有事件通道一致）。
 fn rebuild_folder(app: &AppHandle, idx: usize) {
-    if !app.state::<RebuildGuard>().try_begin() {
+    let guard = app.state::<Arc<RebuildGuard>>();
+    let Some(rebuild_guard) = guard.try_begin() else {
         return;
-    }
+    };
     let app = app.clone();
     std::thread::spawn(move || {
+        let _rebuild_guard = rebuild_guard;
         let outcome = resolve_root_by_index(idx)
             .ok_or_else(|| crate::i18n::strings().stale_root_error.to_string())
             .and_then(|root| crate::rebuild::perform_rebuild_root(&app, root));
-        app.state::<RebuildGuard>().end();
         match outcome {
             Ok(stats) => {
                 let _ = app.emit("dowse://rebuild-done", stats.indexed);
@@ -466,15 +485,16 @@ fn rebuild_folder(app: &AppHandle, idx: usize) {
 /// `dowse://root-removed` 事件（携带删除的文档数），失败复用
 /// `dowse://rebuild-error`（错误文案本身已经足够说明是哪类操作失败）。
 fn remove_folder(app: &AppHandle, idx: usize) {
-    if !app.state::<RebuildGuard>().try_begin() {
+    let guard = app.state::<Arc<RebuildGuard>>();
+    let Some(rebuild_guard) = guard.try_begin() else {
         return;
-    }
+    };
     let app = app.clone();
     std::thread::spawn(move || {
+        let _rebuild_guard = rebuild_guard;
         let outcome = resolve_root_by_index(idx)
             .ok_or_else(|| crate::i18n::strings().stale_root_error.to_string())
             .and_then(|root| crate::rebuild::perform_remove_root(&app, root));
-        app.state::<RebuildGuard>().end();
         match outcome {
             Ok(stats) => {
                 let _ = app.emit("dowse://root-removed", stats.removed);

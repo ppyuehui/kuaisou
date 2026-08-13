@@ -188,6 +188,14 @@ const SNIPPET_MAX_CHARS: usize = 160;
 /// 把“分词扫描量”和“最终展示长度”解耦，从根上避免整篇重新分词。
 const SNIPPET_SCAN_MAX_BYTES: usize = 128 * 1024;
 
+/// 单次搜索返回条目的上限。
+///
+/// 既防 `limit == 0` 撞上 tantivy `TopDocs::with_limit` 的 `assert_ne!(0, ...)`
+/// 直接 panic（前端/CLI/MCP 都直接透传用户可控的 limit，恶意/异常值能触发），
+/// 也防 `limit = usize::MAX` 这类大值把全部命中文档收进内存。前端默认只要 30 条，
+/// 这个上限给得足够宽，不会挡住正常调用。
+const MAX_SEARCH_LIMIT: usize = 10_000;
+
 /// 一条搜索命中。
 ///
 /// [`Searcher::search`] 及其变体返回一批 `SearchHit`。`score` 只有在结果按相关性
@@ -399,6 +407,9 @@ impl Searcher {
         ext_group: Option<&[&str]>,
         sort: SortMode,
     ) -> Result<SearchPage> {
+        // 钳制 limit：0 会让 tantivy 的 TopDocs::with_limit 直接 panic（assert），
+        // 超大值会把全部命中文档收进内存——统一在这里兜住（见 MAX_SEARCH_LIMIT）。
+        let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
         // 把查询串解析成（检索用查询, 只含内容词的高亮查询）：普通输入走稳定的
         // autocomplete 召回；查询语法和结构化操作符仍按原 QueryParser/规则拼。摘要只
         // 认内容词那份，path:/mtime:/size: 这些操作符不进高亮（它们的 term 落在别的
@@ -759,13 +770,12 @@ impl Searcher {
     /// 每根一项要显示"路径 + N 篇"。查询构造跟 `updater.rs::delete_tree`
     /// 是同一套"精确项 ∪ 前缀区间"思路（同前缀不误伤兄弟目录），这里只读
     /// 计数、不删文档。
-    pub fn count_under(&self, root: &Path) -> Result<u64> {
-        let exact = root.to_string_lossy().into_owned();
+    pub fn count_under(&self, root: &Path) -> Result<u64> {        let exact = root.to_string_lossy().into_owned();
         let mut prefix = exact.clone();
         if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
             prefix.push(std::path::MAIN_SEPARATOR);
         }
-        let upper = format!("{prefix}\u{10FFFF}");
+        let upper = subtree_upper_bound(&prefix);
 
         let exact_query = TermQuery::new(
             Term::from_field_text(self.fields.path, &exact),
@@ -901,6 +911,27 @@ impl Searcher {
             .to_owned();
         (size, mtime, ext)
     }
+}
+
+/// 构造"以 `prefix` 开头的所有 term"的字典序区间上界（不含，作 RangeQuery 的
+/// Excluded 边界）：把 `prefix` 的**末字节 +1**。
+///
+/// 字节字典序下，所有以 `prefix` 开头的字符串都 ≥ `prefix`；任何"第一个分歧
+/// 字节大于 `prefix` 末字节"的字符串都落在 `[prefix, 末字节+1)` 之外——这个上界
+/// 恰好精确框住"以 `prefix` 开头的 term"。老实现用 `prefix + U+10FFFF` 当上界：
+/// 对 `D:\docs\` 这种以 `\`（0x5C）结尾的前缀，兄弟目录 `D:\docs中文` 的第一个
+/// 分歧字节是 `中` 的首字节 0xE4，0xE4 < 0xF4，会被一起卷进区间（[`count_under`]
+/// 误计数、`updater::delete_tree` 误删整棵兄弟子树）。改成末字节 +1 后
+/// 0xE4 > 0x5D，正确排除。
+///
+/// 入参始终以路径分隔符（ASCII）结尾，末字节不可能是 0xFF，这里不用再防御。
+pub(crate) fn subtree_upper_bound(prefix: &str) -> String {
+    let mut bytes = prefix.as_bytes().to_vec();
+    let last = bytes.last_mut().expect("prefix 非空");
+    debug_assert!(*last != 0xFF);
+    *last += 1;
+    // 末字节是 ASCII 分隔符（`\`/`/`），+1 后仍是合法 ASCII，from_utf8 必成功。
+    String::from_utf8(bytes).expect("subtree 上界必然合法 UTF-8")
 }
 
 /// 把 tantivy SnippetGenerator 吐出的命中区间整理成有序且互不重叠的序列。
@@ -1629,6 +1660,36 @@ mod tests {
         assert_eq!(searcher.count_under(target_dir.path())?, 2);
 
         std::fs::remove_dir_all(&sibling_named_with_shared_prefix).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn count_under_excludes_sibling_extending_name_with_large_bytes() -> Result<()> {
+        // 回归：老实现用 `prefix + U+10FFFF` 当区间上界，`\`（0x5C）之后首字节是
+        // 中文（0xE4）的兄弟目录（如 `dowse-test-xxx中文`，不缩进、直接接在根名
+        // 后面）会被卷进 count_under 的子树区间误计数。改成"末字节 +1"后 0xE4 >
+        // 0x5D，正确排除。
+        let index_dir = tempfile::tempdir()?;
+        let target_dir = tempfile::Builder::new().prefix("dowse-test-").tempdir()?;
+
+        std::fs::write(target_dir.path().join("a.md"), "内容")?;
+        std::fs::write(target_dir.path().join("b.md"), "内容")?;
+        let root_name = target_dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let sibling = target_dir.path().with_file_name(format!("{root_name}中文"));
+        std::fs::create_dir_all(&sibling)?;
+        std::fs::write(sibling.join("c.md"), "内容")?;
+
+        crate::rebuild_index(index_dir.path(), target_dir.path())?;
+        let searcher = Searcher::open(index_dir.path())?;
+
+        assert_eq!(searcher.count_under(target_dir.path())?, 2);
+
+        std::fs::remove_dir_all(&sibling).ok();
         Ok(())
     }
 

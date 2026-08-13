@@ -125,3 +125,27 @@ fn corrupted_docx_is_skipped_not_indexed() -> Result<()> {
     assert_eq!(count_hits(index_dir.path(), "alpha"), 1);
     Ok(())
 }
+
+#[test]
+fn docx_with_oversized_decompressed_entry_is_skipped() -> Result<()> {
+    // 回归：解压体积上限（防 zip 炸弹）。document.xml 解压后远超过默认 20MB
+    // 的单文件上限，但压缩包本身很小——老实现无上限 read_to_end 会把几十 MB
+    // 读进内存（高压缩比能把几百 MB 的包撑到数 GB 直接 OOM 杀进程）。现在
+    // 必须在读取层被预算挡下、整篇跳过。
+    force_slow_lane_for_tests();
+
+    let index_dir = tempfile::tempdir()?;
+    let target = target_dir();
+
+    // "季度" * 700 万 ≈ 42MB 的重复中文文本，deflate 压完很小，解压后远超预算。
+    let huge = "季度".repeat(7_000_000);
+    write_zip(
+        &target.path().join("bomb.docx"),
+        &[("word/document.xml", &huge)],
+    );
+
+    let stats = rebuild_index(index_dir.path(), target.path())?;
+    assert_eq!(stats.indexed, 0, "解压超预算的 docx 应被跳过，不得入索引");
+    assert_eq!(stats.skipped, 1);
+    Ok(())
+}

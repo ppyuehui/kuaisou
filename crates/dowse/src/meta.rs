@@ -75,7 +75,15 @@ pub(crate) fn save_meta(index_dir: &Path, meta: &IndexMeta) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(meta)?;
-    std::fs::write(&path, bytes).context("写索引元数据失败")?;
+    // 原子写：先写同目录临时文件、fsync 落盘、再 rename 覆盖。直接
+    // `std::fs::write(&path, ...)` 是"截断 + 写"，中途崩溃/断电会留下半截
+    // 文件——meta.json 里同时装着 schema_version 和 roots，写坏一份健康索引
+    // 就要被迫全量重建（代价比"游标丢了无害"大得多，而这个文件在每次 USN
+    // 游标推进时都会写）。临时文件 + 同卷 rename 是原子的，旧文件完好直到
+    // 替换完成。
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &bytes).context("写索引元数据临时文件失败")?;
+    std::fs::rename(&tmp, &path).context("替换索引元数据失败")?;
     Ok(())
 }
 

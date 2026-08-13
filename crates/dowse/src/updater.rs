@@ -18,10 +18,11 @@ use crate::events::{PendingChange, PendingOp};
 use crate::indexer::PROGRESS_INTERVAL;
 use crate::indexer::{
     AddOutcome, add_file_document, add_image_document_with_content, commit_index_tail,
-    is_transient_writer_killed, walk_index_files,
+    file_stat, is_transient_writer_killed, walk_index_files,
 };
 use crate::ocr::is_image;
 use crate::ocr_queue::OcrQueue;
+use crate::searcher::subtree_upper_bound;
 use crate::{Fields, IndexProgress, build_schema, register_tokenizers};
 
 /// 长驻写入端（`IndexUpdater`）撞上杀软扫描瞬时冲突时的重试参数。判据复用
@@ -268,6 +269,12 @@ impl IndexUpdater {
     /// 调用方（`ocr_worker.rs`）控制，这里只管"给一批、提交一批"。
     ///
     /// 空批直接返回 Ok，不做任何写入端操作。
+    ///
+    /// **防"复活"**：worker 出队到写回之间（OCR 是百毫秒级）原文件可能已被删除
+    /// 或改写——watch 的 Remove 已经把这个文档删出索引了，这里再盲目 delete+add
+    /// 会把一篇幽灵文档加回去，直到下次启动对账才清。所以写回前逐张核对
+    /// `file_stat`（存在 + mtime + size）与入队时一致，不一致就跳过这张（删除/
+    /// 改写过的文件，其真实状态由 watch/下次 OCR 入队负责，不需要这张过期结果）。
     pub(crate) fn stage_and_commit_ocr_batch(
         &mut self,
         items: &[(PathBuf, i64, u64, String)],
@@ -277,6 +284,13 @@ impl IndexUpdater {
         }
         self.commit_with_retry(|this| {
             for (path, mtime, size, content) in items {
+                // 文件已删/已改写 → 不写回，也不让它堵着后面的正常条目。
+                let Some((cur_mtime, cur_size)) = file_stat(path) else {
+                    continue;
+                };
+                if cur_mtime != *mtime || cur_size != *size {
+                    continue;
+                }
                 this.delete_exact(path);
                 add_image_document_with_content(
                     &this.writer,
@@ -377,18 +391,19 @@ impl IndexUpdater {
     /// "删文件"和"删目录"两种情形，所以监听侧分不清是文件还是目录时发这一个就够，
     /// 不用再发一条精确删除（发两条会在防抖队列里按同一 path 合并、互相覆盖）。
     ///
-    /// 实现：对 STRING 的 path 字段查 `path == dir` 或 `path ∈ [dir+分隔符, dir+分隔符+U+10FFFF)`，
+    /// 实现：对 STRING 的 path 字段查 `path == dir` 或 `path ∈ [dir+分隔符, subtree_upper_bound)`，
     /// 收集命中文档逐个 delete_term——用 term 查询而不是逐文件比对，目录再大也只走
     /// 一遍倒排。子树范围末尾补分隔符很关键：圈的是"这个目录里的东西"，不会误伤
     /// 同前缀的兄弟（`log` 不会连 `log2/...` 一起删；精确项也只命中 `log` 自己，
-    /// 不会碰到兄弟文件 `log2`）。
+    /// 不会碰到兄弟文件 `log2`）。上界用 `subtree_upper_bound`（末字节 +1）而不是
+    /// `prefix + U+10FFFF`：后者会把 `D:\docs` 的兄弟 `D:\docs中文` 卷进来误删。
     fn delete_tree(&self, path: &Path) -> Result<usize> {
         let exact = path.to_string_lossy().into_owned();
         let mut prefix = exact.clone();
         if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
             prefix.push(std::path::MAIN_SEPARATOR);
         }
-        let upper = format!("{prefix}\u{10FFFF}");
+        let upper = subtree_upper_bound(&prefix);
 
         let exact_query = TermQuery::new(
             Term::from_field_text(self.fields.path, &exact),

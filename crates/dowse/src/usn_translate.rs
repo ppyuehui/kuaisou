@@ -187,7 +187,16 @@ impl UsnTranslator {
                 path,
                 is_dir: record.is_dir,
             },
-            None => UsnOutcome::None,
+            None => {
+                // 链拼不出来 = 不在任何监听根下（或父链暂缺）。不要留在表里：
+                // 否则监听根外的文件/目录每来一条记录就往表里塞一条，live 期
+                // 无界增长到整卷规模（retain_in_scope 只在启动 MFT 枚举时跑
+                // 一次，管不了 live 增量）。后续该 FRN 的任意新记录会重新插入；
+                // 真在监听根内但父链暂缺的瞬态，会由父目录的 UpsertDir 在消费
+                // 侧下钻补上。
+                self.table.remove(record.frn);
+                UsnOutcome::None
+            }
         }
     }
 
